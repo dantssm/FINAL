@@ -1,8 +1,10 @@
-google-generativeai
-httpx
+httpx[http2]
 python-dotenv
 fastapi
 uvicorn
 selectolax
-chromadb  # Vector database
-sentence-transformers  # For embeddings
+chromadb
+sentence-transformers
+aiofiles
+orjson
+tenacity

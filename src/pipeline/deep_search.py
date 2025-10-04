@@ -1,6 +1,6 @@
 # src/pipeline/deep_search.py
 """
-Deep Search Pipeline with Session-based RAG
+Deep Search Pipeline with Session-based RAG and OpenRouter
 Each user session gets its own temporary knowledge base
 """
 
@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from src.config import config
 from src.search.google_search import GoogleSearcher
 from src.search.web_scraper import WebScraper
-from src.llm.gemini_client import GeminiClient
+from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
 
 
@@ -84,7 +84,7 @@ class SessionManager:
 
 
 class DeepSearchPipeline:
-    """Main Deep Search Pipeline with session-based RAG"""
+    """Main Deep Search Pipeline with session-based RAG and OpenRouter"""
     
     def __init__(self):
         """Initialize pipeline with session management"""
@@ -96,7 +96,12 @@ class DeepSearchPipeline:
             config.GOOGLE_CSE_ID
         )
         self.web_scraper = WebScraper()
-        self.gemini_client = GeminiClient(config.GEMINI_API_KEY)
+        
+        # Use OpenRouter instead of Gemini
+        self.llm_client = OpenRouterClient(
+            config.OPENROUTER_API_KEY,
+            model_name=config.OPENROUTER_MODEL
+        )
         
         # Session manager for RAG stores
         self.session_manager = SessionManager()
@@ -104,7 +109,8 @@ class DeepSearchPipeline:
         # Store search history per session
         self.session_histories = {}
         
-        print(f"✅ Deep Search Pipeline initialized with session-based RAG")
+        print(f"✅ Deep Search Pipeline initialized")
+        print(f"   Using: {config.OPENROUTER_MODEL}")
     
     def generate_session_id(self) -> str:
         """Generate a new unique session ID"""
@@ -116,8 +122,8 @@ class DeepSearchPipeline:
         self,
         query: str,
         session_id: Optional[str] = None,
-        depth: int = 3,  # INCREASED default depth for deeper search
-        max_results_per_search: int = 7,  # MORE results per search
+        depth: int = 2,
+        max_results_per_search: int = 5,
         use_rag: bool = True
     ) -> Dict:
         """
@@ -228,7 +234,7 @@ class DeepSearchPipeline:
             # Generate follow-up queries for deeper research
             if iteration < depth - 1 and all_search_results:
                 print("🤔 Generating follow-up queries...")
-                new_queries = await self.gemini_client.generate_search_queries(
+                new_queries = await self.llm_client.generate_search_queries(
                     query,
                     num_queries=2
                 )
@@ -251,7 +257,7 @@ class DeepSearchPipeline:
         print(f"   - {sum(1 for r in all_search_results if r.get('from_session_rag'))} from session knowledge")
         print(f"   - {sum(1 for r in all_search_results if not r.get('from_session_rag'))} from new searches")
         
-        answer = await self.gemini_client.generate_response(
+        answer = await self.llm_client.generate_response(
             prompt=query,
             search_results=all_search_results
         )
@@ -332,21 +338,21 @@ class DeepSearchPipeline:
             
             if vector_store.get_stats()['total_documents'] > 0:
                 rag_results = vector_store.search(message, n_results=5)
-                response = await self.gemini_client.generate_response(
+                response = await self.llm_client.generate_response(
                     prompt=message,
                     context=context,
                     search_results=rag_results
                 )
             else:
                 # No documents in session yet
-                response = await self.gemini_client.generate_response(
+                response = await self.llm_client.generate_response(
                     prompt=message,
                     context=context
                 )
             return response
         else:
-            # Just use Gemini without search or RAG
-            response = await self.gemini_client.generate_response(
+            # Just use LLM without search or RAG
+            response = await self.llm_client.generate_response(
                 prompt=message,
                 context=context
             )
@@ -378,6 +384,7 @@ class DeepSearchPipeline:
         stats['session_id'] = session_id
         stats['search_history_length'] = len(self.session_histories.get(session_id, []))
         stats['active_sessions'] = self.session_manager.get_active_sessions_count()
+        stats['llm_model'] = self.llm_client.get_model_info()
         
         return stats
     
@@ -395,5 +402,5 @@ class DeepSearchPipeline:
     def clear_history(self):
         """Clear all session histories (but keep vector stores)"""
         self.session_histories = {}
-        self.gemini_client.clear_history()
+        self.llm_client.clear_history()
         print("✅ All session histories cleared")
