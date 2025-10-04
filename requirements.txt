@@ -1,0 +1,8 @@
+google-generativeai
+httpx
+python-dotenv
+fastapi
+uvicorn
+selectolax
+chromadb  # Vector database
+sentence-transformers  # For embeddings
