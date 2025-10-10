@@ -367,3 +367,11 @@ select{padding:6px 8px;border-radius:6px;border:1px solid #e3e3e3;background:#ff
   pointer-events: auto;
   transform: translateY(0);
 }
+
+.answer {
+  background: #fff;
+  padding: 18px;
+  border-radius: 10px;
+  margin-bottom: 14px;
+  border-left: 4px solid var(--accent-1);
+}
