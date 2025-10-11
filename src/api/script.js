@@ -1,98 +1,259 @@
-// /static/script.js
+// src/api/script.js
+let searchWebSocket = null;
+let currentSearchId = null;
+
 async function search() {
   const query = document.getElementById('searchInput').value.trim();
   if (!query) return;
 
+  console.log("🔍 Starting search with query:", query); 
+
   const depth = parseInt(document.getElementById('depth').value, 10) || 3;
   const maxResults = parseInt(document.getElementById('maxResults').value, 10) || 7;
+  
+  console.log("📊 Settings - depth:", depth, "maxResults:", maxResults);
+
+  const resultsDiv = document.getElementById('results');
+  const statusDiv = document.getElementById('status-log');
+  const searchBtn = document.getElementById('searchBtn');
+
+  // Generate unique search ID
+  currentSearchId = 'search-' + Date.now();
+
+  // Update UI
+  searchBtn.disabled = true;
+  searchBtn.textContent = 'Searching...';
+  resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Initializing deep search...</p></div>';
+  statusDiv.innerHTML = '';
+
+  // Initialize WebSocket connection
+  initializeWebSocket();
+
+  // Wait a bit for WebSocket to connect before sending message
+  setTimeout(() => {
+    // Send search request via WebSocket
+    if (searchWebSocket && searchWebSocket.readyState === WebSocket.OPEN) {
+      const message = {
+        type: "search",
+        query: query,
+        depth: depth,
+        max_results: maxResults,
+        session_id: currentSearchId
+      };
+      
+      console.log("📤 Sending WebSocket message:", message);
+      searchWebSocket.send(JSON.stringify(message));
+    } else {
+      console.error("❌ WebSocket not connected. State:", searchWebSocket?.readyState);
+      showError('WebSocket connection failed. Using fallback REST API...');
+      // Fallback to REST API
+      fallbackRestSearch(query, depth, maxResults, searchBtn);
+    }
+  }, 500);
+}
+
+function initializeWebSocket() {
+  // Close existing connection
+  if (searchWebSocket) {
+    searchWebSocket.close();
+  }
+
+  // Create new WebSocket connection
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws/search`;
+  
+  console.log("🔗 Connecting to WebSocket:", wsUrl);
+  searchWebSocket = new WebSocket(wsUrl);
+
+  searchWebSocket.onopen = function(event) {
+    console.log('✅ WebSocket connected');
+    updateStatus('Connected to search engine...', 'connected');
+  };
+
+  searchWebSocket.onmessage = function(event) {
+    try {
+      console.log("📥 Received WebSocket message:", event.data);
+      const data = JSON.parse(event.data);
+      handleWebSocketMessage(data);
+    } catch (e) {
+      console.error('Failed to parse WebSocket message:', e);
+    }
+  };
+
+  searchWebSocket.onclose = function(event) {
+    console.log('❌ WebSocket disconnected, code:', event.code);
+    if (event.code !== 1000) {
+      updateStatus('Connection lost. Please try again.', 'error');
+    }
+  };
+
+  searchWebSocket.onerror = function(error) {
+    console.error('WebSocket error:', error);
+    updateStatus('Connection error. Please refresh the page.', 'error');
+  };
+}
+
+function handleWebSocketMessage(data) {
+  console.log("🔄 Handling WebSocket message type:", data.type);
+  
+  const statusDiv = document.getElementById('status-log');
   const resultsDiv = document.getElementById('results');
   const searchBtn = document.getElementById('searchBtn');
 
-  searchBtn.disabled = true;
-  searchBtn.textContent = 'Going...';
-  resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Deep searching across the web...</p></div>';
+  switch (data.type) {
+    case 'status':
+      updateStatus(data.message, 'status');
+      break;
+      
+    case 'progress':
+      updateProgress(data.message, data.current, data.total);
+      break;
+      
+    case 'complete':
+      // Search completed, display results
+      console.log("✅ Search completed, displaying results");
+      displaySearchResults(data.data);
+      resetSearchButton(searchBtn);
+      break;
+      
+    case 'error':
+      console.error("❌ Search error:", data.message);
+      showError(data.message);
+      resetSearchButton(searchBtn);
+      break;
+      
+    default:
+      console.log('Unknown message type:', data);
+  }
+}
 
+// Fallback to REST API if WebSocket fails
+async function fallbackRestSearch(query, depth, maxResults, searchBtn) {
+  console.log("🔄 Using REST API fallback");
+  updateStatus('Using standard search...', 'status');
+  
   try {
     const response = await fetch('/search', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ query, depth, max_results: maxResults })
+      body: JSON.stringify({ 
+        query: query, 
+        depth: depth,
+        max_results: maxResults 
+      })
     });
 
     if (!response.ok) throw new Error('Search failed');
-
     const data = await response.json();
-    const raw = data.answer || '';
-
-    // 1) Normalize: strip Markdown markers but keep LaTeX math intact
-    const normalized = stripMarkdownKeepMath(raw);
-
-    // 2) Split into paragraphs, trim, dedupe identical paragraphs while preserving order
-    const paragraphs = normalized
-      .split(/\n\s*\n/)
-      .map(p => p.trim())
-      .filter(p => p.length > 0);
-
-    const seen = new Set();
-    const uniqueParagraphs = [];
-    for (const p of paragraphs) {
-      if (!seen.has(p)) {
-        seen.add(p);
-        uniqueParagraphs.push(p);
-      }
-    }
-
-    // 3) Build HTML output
-    let html = '<div class="result-card">';
-    html += '<div class="answer">';
-
-    if (uniqueParagraphs.length === 0) {
-      html += '<p>No answer returned.</p>';
-    } else {
-      uniqueParagraphs.forEach(p => {
-        const safe = escapeHtmlExceptMath(p).replace(/\n/g, '<br>');
-        html += '<p>' + safe + '</p>';
-      });
-    }
-
-    html += '</div>';
-
-    // Sources block
-    if (Array.isArray(data.sources) && data.sources.length > 0) {
-      html += '<div class="sources">';
-      html += '<div style="font-weight:700;margin-bottom:8px">📚 Sources (' + (data.total_sources || data.sources.length) + '):</div>';
-      data.sources.forEach(source => {
-        html += '<div class="source">';
-        html += '<div class="source-title">' + escapeHtml(source.title || '') + '</div>';
-        html += '<a href="' + escapeAttr(source.url || '#') + '" target="_blank" rel="noreferrer" class="source-url">' + escapeHtml(source.url || '') + '</a>';
-        if (source.snippet) html += '<div class="source-snippet">' + escapeHtml(source.snippet) + '</div>';
-        html += '</div>';
-      });
-      html += '</div>';
-    }
-
-    html += '</div>';
-    resultsDiv.innerHTML = html;
-
-    // 4) Trigger MathJax typesetting if present
-    if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
-      try { await window.MathJax.typesetPromise(); } catch (e) { console.warn('MathJax typeset error', e); }
-    }
+    
+    console.log("✅ REST search completed");
+    displaySearchResults(data);
+    
   } catch (err) {
-    resultsDiv.innerHTML = '<div class="error">Error: ' + escapeHtml(err.message || 'Unknown') + '</div>';
+    console.error("❌ REST search failed:", err);
+    showError(err.message);
   } finally {
-    searchBtn.disabled = false;
-    searchBtn.textContent = 'Search';
+    resetSearchButton(searchBtn);
   }
 }
 
-// ---- Helpers ----
+function updateStatus(message, type = 'status') {
+  const statusDiv = document.getElementById('status-log');
+  const div = document.createElement('div');
+  div.className = `status-message ${type}`;
+  div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  statusDiv.appendChild(div);
+  statusDiv.scrollTop = statusDiv.scrollHeight;
+}
 
-// Strip Markdown headings and bold markers, preserve math ($...$ and $$...$$)
+function updateProgress(message, current, total) {
+  const statusDiv = document.getElementById('status-log');
+  const progress = total > 0 ? ` (${current}/${total})` : '';
+  updateStatus(message + progress, 'progress');
+}
+
+function displaySearchResults(data) {
+  const resultsDiv = document.getElementById('results');
+  
+  if (!data) {
+    resultsDiv.innerHTML = '<div class="error">No results received</div>';
+    return;
+  }
+
+  console.log("📄 Displaying search results, answer length:", data.answer?.length);
+
+  const raw = data.answer || '';
+  const normalized = stripMarkdownKeepMath(raw);
+  const paragraphs = normalized.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  
+  const seen = new Set();
+  const uniqueParagraphs = [];
+  for (const p of paragraphs) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      uniqueParagraphs.push(p);
+    }
+  }
+
+  let html = '<div class="result-card">';
+  html += '<div class="answer">';
+
+  if (uniqueParagraphs.length === 0) {
+    html += '<p>No answer returned.</p>';
+  } else {
+    uniqueParagraphs.forEach(p => {
+      const safe = escapeHtmlExceptMath(p).replace(/\n/g, '<br>');
+      html += '<p>' + safe + '</p>';
+    });
+  }
+
+  html += '</div>';
+
+  // Sources block
+  if (Array.isArray(data.sources) && data.sources.length > 0) {
+    html += '<div class="sources">';
+    html += '<div style="font-weight:700;margin-bottom:8px">📚 Sources (' + (data.total_sources || data.sources.length) + '):</div>';
+    data.sources.forEach(source => {
+      html += '<div class="source">';
+      html += '<div class="source-title">' + escapeHtml(source.title || '') + '</div>';
+      html += '<a href="' + escapeAttr(source.url || '#') + '" target="_blank" rel="noreferrer" class="source-url">' + escapeHtml(source.url || '') + '</a>';
+      if (source.snippet) html += '<div class="source-snippet">' + escapeHtml(source.snippet) + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  resultsDiv.innerHTML = html;
+
+  // Trigger MathJax typesetting
+  if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
+    try { 
+      window.MathJax.typesetPromise(); 
+    } catch (e) { 
+      console.warn('MathJax typeset error', e); 
+    }
+  }
+}
+
+function showError(message) {
+  const resultsDiv = document.getElementById('results');
+  const searchBtn = document.getElementById('searchBtn');
+  
+  resultsDiv.innerHTML = '<div class="error">Error: ' + escapeHtml(message || 'Unknown') + '</div>';
+  resetSearchButton(searchBtn);
+}
+
+function resetSearchButton(button) {
+  if (button) {
+    button.disabled = false;
+    button.textContent = 'Search';
+  }
+}
+
+// Helper functions
 function stripMarkdownKeepMath(text) {
   if (!text) return '';
-
-  // extract math regions
   const mathRegions = [];
   const mathRe = /(\$\$[\s\S]+?\$\$|\$[^$\n]+\$)/g;
   let idx = 0;
@@ -103,21 +264,16 @@ function stripMarkdownKeepMath(text) {
     return key;
   });
 
-  // remove leading Markdown headers and bold/italic markers
   const cleanedLines = placeholderText.split('\n').map(line => {
-    // remove leading hashes and a following space
     line = line.replace(/^\s{0,3}#{1,6}\s*/, '');
-    // remove bold/italic markers but keep text
     line = line.replace(/\*\*(.*?)\*\*/g, '$1');
     line = line.replace(/__(.*?)__/g, '$1');
     line = line.replace(/\*(.*?)\*/g, '$1');
     line = line.replace(/_(.*?)_/g, '$1');
-    // remove backticks for inline code
     line = line.replace(/`([^`]+)`/g, '$1');
     return line;
   }).join('\n');
 
-  // restore math regions
   let restored = cleanedLines;
   for (const r of mathRegions) {
     restored = restored.replace(r.key, r.math);
@@ -125,7 +281,6 @@ function stripMarkdownKeepMath(text) {
   return restored;
 }
 
-// Escape HTML but keep math regions intact
 function escapeHtmlExceptMath(text) {
   if (!text) return '';
   const mathRegions = [];
@@ -170,3 +325,17 @@ function escapeAttr(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+// Close WebSocket when page unloads
+window.addEventListener('beforeunload', function() {
+  if (searchWebSocket) {
+    searchWebSocket.close();
+  }
+});
+
+// Add Enter key support
+document.getElementById('searchInput').addEventListener('keypress', function(event) {
+  if (event.key === 'Enter') {
+    search();
+  }
+});

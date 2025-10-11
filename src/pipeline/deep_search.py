@@ -10,12 +10,30 @@ import hashlib
 import os
 import shutil
 from datetime import datetime, timedelta
+from fastapi import WebSocket
+
 from src.config import config
 from src.search.google_search import GoogleSearcher
 from src.search.web_scraper import WebScraper
 from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
+from datetime import datetime
 
+class SearchLogger:
+    """Tracks and stores step-by-step progress of a deep search request"""
+
+    def __init__(self):
+        self.steps = []
+
+    def log(self, message: str):
+        """Add a timestamped log entry"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.steps.append(f"[{timestamp}] {message}")
+        print(message)  # Keep console logging
+
+    def get_steps(self):
+        """Return all logged steps"""
+        return self.steps
 
 class SessionManager:
     """Manages session-based vector stores"""
@@ -112,6 +130,17 @@ class DeepSearchPipeline:
         print(f"✅ Deep Search Pipeline initialized")
         print(f"   Using: {config.OPENROUTER_MODEL}")
     
+    async def _send_websocket_progress(self, websocket: Optional[WebSocket], message: dict):
+        """Send WebSocket message without blocking main execution"""
+        if not websocket:
+            return
+            
+        try:
+            await websocket.send_json(message)
+        except Exception as e:
+            # Silent fail - don't break search process
+            pass
+    
     def generate_session_id(self) -> str:
         """Generate a new unique session ID"""
         timestamp = str(datetime.now().timestamp())
@@ -124,7 +153,8 @@ class DeepSearchPipeline:
         session_id: Optional[str] = None,
         depth: int = 2,
         max_results_per_search: int = 5,
-        use_rag: bool = True
+        use_rag: bool = True,
+        websocket: Optional[WebSocket] = None
     ) -> Dict:
         """
         Perform deep search with session-based RAG
@@ -135,10 +165,18 @@ class DeepSearchPipeline:
             depth: How many levels of search to perform (1-3)
             max_results_per_search: Number of results per search
             use_rag: Whether to use RAG for enhanced retrieval
+            websocket: WebSocket connection for real-time progress updates
             
         Returns:
             Dictionary with answer, sources, and session_id
         """
+        # Send initial progress via WebSocket
+        await self._send_websocket_progress(websocket, {
+            "type": "status", 
+            "message": "🎯 Starting deep search...",
+            "stage": "starting"
+        })
+
         # Get or create session ID
         if not session_id:
             session_id = self.generate_session_id()
@@ -146,7 +184,15 @@ class DeepSearchPipeline:
         # Get session-specific vector store
         vector_store = self.session_manager.get_or_create_session(session_id)
         
-        print(f"\n🔍 Starting deep search")
+        logger = SearchLogger()
+
+        logger.log(f"\n Starting deep search")
+        logger.log(f"   Session: {session_id[:8]}...")
+        logger.log(f"   Query: '{query}'")
+        logger.log(f"   Depth: {depth}, Max results: {max_results_per_search}")
+        logger.log(f"   Session knowledge: {vector_store.get_stats()['total_documents']} docs")
+        
+        print(f"\n Starting deep search")
         print(f"   Session: {session_id[:8]}...")
         print(f"   Query: '{query}'")
         print(f"   Depth: {depth}, Max results: {max_results_per_search}")
@@ -159,10 +205,18 @@ class DeepSearchPipeline:
         
         # Step 1: Check session's RAG for existing relevant information
         if use_rag and vector_store.get_stats()['total_documents'] > 0:
+            await self._send_websocket_progress(websocket, {
+                "type": "status",
+                "message": "🧠 Checking session knowledge...",
+                "stage": "session_check"
+            })
+            
+            logger.log("\n🧠 Checking session knowledge...")
             print("\n🧠 Checking session knowledge...")
             rag_results = vector_store.search(query, n_results=5)
             
             if rag_results:
+                logger.log(f"   Found {len(rag_results)} relevant documents from this session")
                 print(f"   Found {len(rag_results)} relevant documents from this session")
                 
                 # Add RAG results to search results
@@ -178,6 +232,15 @@ class DeepSearchPipeline:
         
         # Step 2: Perform web searches for new information
         for iteration in range(depth):
+            await self._send_websocket_progress(websocket, {
+                "type": "progress", 
+                "stage": "search_level",
+                "message": f"📍 Search Level {iteration + 1}/{depth}",
+                "current": iteration + 1,
+                "total": depth
+            })
+            
+            logger.log(f"\n📍 Search Level {iteration + 1}/{depth}")
             print(f"\n📍 Search Level {iteration + 1}/{depth}")
             print("-" * 30)
             
@@ -185,6 +248,13 @@ class DeepSearchPipeline:
                 break
             
             current_query = search_queries.pop(0)
+            
+            await self._send_websocket_progress(websocket, {
+                "type": "status",
+                "message": f"🔎 Searching: {current_query}",
+                "stage": "google_search"
+            })
+            
             print(f"🔎 Searching web: {current_query}")
             
             # Search Google
@@ -205,10 +275,17 @@ class DeepSearchPipeline:
                 if result['link'] not in existing_urls:
                     new_urls.append(result['link'])
                 else:
+                    logger.log(f"   ⏭️ Skipping (already in session): {result['title'][:40]}...")
                     print(f"   ⏭️ Skipping (already in session): {result['title'][:40]}...")
             
             if new_urls:
-                # Scrape new content
+                await self._send_websocket_progress(websocket, {
+                    "type": "status",
+                    "message": f"📄 Scraping {len(new_urls)} websites...",
+                    "stage": "scraping"
+                })
+                
+                logger.log(f"📄 Scraping {len(new_urls)} new websites...")
                 print(f"📄 Scraping {len(new_urls)} new websites...")
                 scraped_content = await self.web_scraper.scrape_multiple(new_urls)
                 
@@ -233,6 +310,13 @@ class DeepSearchPipeline:
             
             # Generate follow-up queries for deeper research
             if iteration < depth - 1 and all_search_results:
+                await self._send_websocket_progress(websocket, {
+                    "type": "status",
+                    "message": "🤔 Generating follow-up queries...",
+                    "stage": "query_generation"
+                })
+                
+                logger.log("🤔 Generating follow-up queries...")
                 print("🤔 Generating follow-up queries...")
                 new_queries = await self.llm_client.generate_search_queries(
                     query,
@@ -242,6 +326,7 @@ class DeepSearchPipeline:
                 for q in new_queries:
                     if q not in search_queries and q != current_query:
                         search_queries.append(q)
+                        logger.log(f"   + Added: {q}")
                         print(f"   + Added: {q}")
         
         # Step 3: Sort results by relevance
@@ -253,9 +338,24 @@ class DeepSearchPipeline:
         )
         
         # Step 4: Generate comprehensive answer
+        await self._send_websocket_progress(websocket, {
+            "type": "status",
+            "message": f"🧠 Analyzing {len(all_search_results)} sources...",
+            "stage": "analysis"
+        })
+        
+        logger.log(f"\n🧠 Analyzing {len(all_search_results)} sources...")
+        logger.log(f"   - {sum(1 for r in all_search_results if r.get('from_session_rag'))} from session knowledge")
+        logger.log(f"   - {sum(1 for r in all_search_results if not r.get('from_session_rag'))} from new searches")
         print(f"\n🧠 Analyzing {len(all_search_results)} sources...")
         print(f"   - {sum(1 for r in all_search_results if r.get('from_session_rag'))} from session knowledge")
         print(f"   - {sum(1 for r in all_search_results if not r.get('from_session_rag'))} from new searches")
+        
+        await self._send_websocket_progress(websocket, {
+            "type": "status", 
+            "message": "✍️ Generating comprehensive answer...",
+            "stage": "llm_generation"
+        })
         
         answer = await self.llm_client.generate_response(
             prompt=query,
@@ -294,10 +394,22 @@ class DeepSearchPipeline:
             "session_knowledge_size": vector_store.get_stats()['total_documents']
         }
         
+        # Send completion progress via WebSocket
+        await self._send_websocket_progress(websocket, {
+            "type": "complete",
+            "message": "✅ Search complete!",
+            "stage": "complete",
+            "data": result
+        })
+        
+        logger.log(f"\n✅ Search complete!")
+        logger.log(f"   Total sources: {result['total_sources']}")
+        logger.log(f"   Session knowledge: {result['session_knowledge_size']} documents")
         print(f"\n✅ Search complete!")
         print(f"   Total sources: {result['total_sources']}")
         print(f"   Session knowledge: {result['session_knowledge_size']} documents")
         
+        result["steps_log"] = logger.get_steps()
         return result
     
     async def chat(
@@ -305,7 +417,8 @@ class DeepSearchPipeline:
         message: str,
         session_id: str,
         use_search: bool = True,
-        use_rag: bool = True
+        use_rag: bool = True,
+        websocket: Optional[WebSocket] = None
     ) -> str:
         """
         Chat with session context
@@ -315,6 +428,7 @@ class DeepSearchPipeline:
             session_id: Session identifier
             use_search: Whether to perform web search
             use_rag: Whether to use session's RAG
+            websocket: WebSocket connection for real-time progress
             
         Returns:
             AI response
@@ -323,20 +437,27 @@ class DeepSearchPipeline:
         context = self._build_session_context(session_id)
         
         if use_search:
-            # Perform search and get answer
+            # Perform search and get answer with WebSocket progress
             result = await self.search(
                 message,
                 session_id=session_id,
                 depth=1,
                 max_results_per_search=3,
-                use_rag=use_rag
+                use_rag=use_rag,
+                websocket=websocket
             )
-            return result['answer']
+            return result['answer'] 
         elif use_rag:
             # Use session's RAG without web search
             vector_store = self.session_manager.get_or_create_session(session_id)
             
             if vector_store.get_stats()['total_documents'] > 0:
+                await self._send_websocket_progress(websocket, {
+                    "type": "status",
+                    "message": "🧠 Searching session knowledge...",
+                    "stage": "rag_search"
+                })
+                
                 rag_results = vector_store.search(message, n_results=5)
                 response = await self.llm_client.generate_response(
                     prompt=message,

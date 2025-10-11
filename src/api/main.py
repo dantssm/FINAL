@@ -1,5 +1,5 @@
 # src/api/main.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # ADD WebSocket here!
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,8 +8,10 @@ from typing import Optional, List, Dict
 from datetime import datetime
 import os
 import asyncio
+import uuid
 
 from src.pipeline.deep_search import DeepSearchPipeline
+from src.api.websocket_manager import manager  # ADD this import
 
 app = FastAPI(
     title="AI Deep Search Engine with RAG",
@@ -61,7 +63,61 @@ class ChatResponse(BaseModel):
     timestamp: str
 
 # -------------------------------
-# Routes
+# WebSocket Routes
+# -------------------------------
+@app.websocket("/ws/search")
+async def websocket_search(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Wait for search request from client
+            data = await websocket.receive_json()
+            print(f"📥 Received WebSocket message: {data}")
+            
+            if data.get("type") == "search":
+                query = data.get("query", "")
+                depth = data.get("depth", 3)
+                max_results = data.get("max_results", 7)
+                session_id = data.get("session_id", "")
+                
+                print(f"🔍 Starting search for: '{query}'")
+                
+                if not query:
+                    await manager.send_message(websocket, {
+                        "type": "error",
+                        "message": "Query is required"
+                    })
+                    continue
+                
+                print(f"🔍 WebSocket search: {query}")
+                
+                # Perform search with WebSocket progress
+                try:
+                    result = await pipeline.search(
+                        query=query,
+                        session_id=session_id,
+                        depth=depth,
+                        max_results_per_search=max_results,
+                        websocket=websocket  # Pass WebSocket for progress updates
+                    )
+                    
+                    # Final result is already sent via WebSocket in pipeline
+                    # So we don't need to send it again
+                    
+                except Exception as e:
+                    await manager.send_message(websocket, {
+                        "type": "error",
+                        "message": f"Search failed: {str(e)}"
+                    })
+                    
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        manager.disconnect(websocket)
+
+# -------------------------------
+# REST Routes (keep existing)
 # -------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -72,7 +128,7 @@ async def root():
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    """Perform deep search"""
+    """Perform deep search (legacy REST endpoint)"""
     try:
         result = await pipeline.search(
             query=request.query,
