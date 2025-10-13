@@ -138,7 +138,7 @@ class DeepSearchPipeline:
         try:
             await websocket.send_json(message)
         except Exception as e:
-            # Silent fail - don't break search process
+            # Silent fail - don't break search process 
             pass
     
     def generate_session_id(self) -> str:
