@@ -1,5 +1,5 @@
 # src/api/main.py
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect  # ADD WebSocket here!
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -7,16 +7,15 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
 import os
-import asyncio
 import uuid
 
 from src.pipeline.deep_search import DeepSearchPipeline
-from src.api.websocket_manager import manager  # ADD this import
+from src.api.websocket_manager import manager
 
 app = FastAPI(
-    title="AI Deep Search Engine with RAG",
-    description="Deep search with AI-powered analysis and session-based knowledge",
-    version="2.0.0"
+    title="AI Deep Search Engine - OPTIMIZED FREE",
+    description="Lightning-fast deep search with FREE services only",
+    version="3.0.0"
 )
 
 # Enable CORS
@@ -28,16 +27,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files (CSS, JS)
+# Serve static files
 BASE_DIR = os.path.dirname(__file__)
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
+# Initialize pipeline
 pipeline = DeepSearchPipeline()
 chat_sessions = {}
 
-# -------------------------------
 # Models
-# -------------------------------
 class SearchRequest(BaseModel):
     query: str
     depth: int = 3
@@ -55,6 +53,7 @@ class SearchResponse(BaseModel):
     total_sources: int
     search_depth: int
     timestamp: str
+    cache_stats: Optional[Dict] = None
 
 class ChatResponse(BaseModel):
     message: str
@@ -62,25 +61,20 @@ class ChatResponse(BaseModel):
     session_id: str
     timestamp: str
 
-# -------------------------------
 # WebSocket Routes
-# -------------------------------
 @app.websocket("/ws/search")
 async def websocket_search(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Wait for search request from client
             data = await websocket.receive_json()
-            print(f"📥 Received WebSocket message: {data}")
+            print(f"📥 Received: {data}")
             
             if data.get("type") == "search":
                 query = data.get("query", "")
                 depth = data.get("depth", 3)
                 max_results = data.get("max_results", 7)
                 session_id = data.get("session_id", "")
-                
-                print(f"🔍 Starting search for: '{query}'")
                 
                 if not query:
                     await manager.send_message(websocket, {
@@ -91,18 +85,16 @@ async def websocket_search(websocket: WebSocket):
                 
                 print(f"🔍 WebSocket search: {query}")
                 
-                # Perform search with WebSocket progress
                 try:
                     result = await pipeline.search(
                         query=query,
                         session_id=session_id,
                         depth=depth,
                         max_results_per_search=max_results,
-                        websocket=websocket  # Pass WebSocket for progress updates
+                        websocket=websocket
                     )
                     
-                    # Final result is already sent via WebSocket in pipeline
-                    # So we don't need to send it again
+                    # Result already sent via WebSocket
                     
                 except Exception as e:
                     await manager.send_message(websocket, {
@@ -116,9 +108,7 @@ async def websocket_search(websocket: WebSocket):
         print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
 
-# -------------------------------
-# REST Routes (keep existing)
-# -------------------------------
+# REST Routes
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Serve HTML page"""
@@ -128,7 +118,7 @@ async def root():
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    """Perform deep search (legacy REST endpoint)"""
+    """Perform deep search (REST endpoint)"""
     try:
         result = await pipeline.search(
             query=request.query,
@@ -141,7 +131,8 @@ async def search(request: SearchRequest):
             sources=result['sources'],
             total_sources=result['total_sources'],
             search_depth=result['search_depth'],
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            cache_stats=result.get('cache_stats')
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -152,15 +143,19 @@ async def chat(request: ChatRequest):
     try:
         if request.session_id not in chat_sessions:
             chat_sessions[request.session_id] = []
+        
         response = await pipeline.chat(
             message=request.message,
+            session_id=request.session_id,
             use_search=request.use_search
         )
+        
         chat_sessions[request.session_id].append({
             "message": request.message,
             "response": response,
             "timestamp": datetime.now().isoformat()
         })
+        
         return ChatResponse(
             message=request.message,
             response=response,
@@ -172,19 +167,47 @@ async def chat(request: ChatRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    """Health check with cache stats"""
+    stats = pipeline.get_knowledge_stats()
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "cache_stats": stats.get('cache_stats'),
+        "active_sessions": stats.get('active_sessions')
+    }
+
+@app.get("/cache/stats")
+async def cache_stats():
+    """Get cache statistics"""
+    stats = pipeline.get_knowledge_stats()
+    return {
+        "cache": stats.get('cache_stats'),
+        "active_sessions": stats.get('active_sessions'),
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.post("/cache/clear")
+async def clear_cache():
+    """Clear cache (admin endpoint)"""
+    await pipeline.cache.clear_all()
+    return {
+        "status": "success",
+        "message": "Cache cleared",
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.get("/knowledge-stats")
 async def knowledge_stats():
+    """Get knowledge base statistics"""
     stats = pipeline.get_knowledge_stats()
     return {
-        "total_documents": stats['total_documents'],
-        "search_history_length": stats['search_history_length'],
+        "cache_stats": stats.get('cache_stats'),
+        "active_sessions": stats.get('active_sessions'),
         "timestamp": datetime.now().isoformat()
     }
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting AI Deep Search API...")
+    print("🚀 Starting OPTIMIZED AI Deep Search API (FREE)...")
     print("📍 Open http://localhost:8000 in your browser")
     uvicorn.run(app, host="0.0.0.0", port=8000)
