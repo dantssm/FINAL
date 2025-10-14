@@ -6,50 +6,54 @@ async function search() {
   const query = document.getElementById('searchInput').value.trim();
   if (!query) return;
 
-  console.log("🔍 Starting search with query:", query); 
-
   const depth = parseInt(document.getElementById('depth').value, 10) || 3;
   const maxResults = parseInt(document.getElementById('maxResults').value, 10) || 7;
   
-  console.log("📊 Settings - depth:", depth, "maxResults:", maxResults);
-
   const resultsDiv = document.getElementById('results');
   const statusDiv = document.getElementById('status-log');
   const searchBtn = document.getElementById('searchBtn');
 
-  // Generate unique search ID
   currentSearchId = 'search-' + Date.now();
 
-  // Update UI
   searchBtn.disabled = true;
   searchBtn.textContent = 'Searching...';
   resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>Initializing deep search...</p></div>';
   statusDiv.innerHTML = '';
 
-  // Initialize WebSocket connection
-  initializeWebSocket();
+  // Try WebSocket first, fallback to REST if it fails
+  try {
+    await initializeAndSearch(query, depth, maxResults);
+  } catch (error) {
+    console.error("WebSocket failed, using REST API:", error);
+    await fallbackRestSearch(query, depth, maxResults, searchBtn);
+  }
+}
 
-  // Wait a bit for WebSocket to connect before sending message
-  setTimeout(() => {
-    // Send search request via WebSocket
-    if (searchWebSocket && searchWebSocket.readyState === WebSocket.OPEN) {
-      const message = {
-        type: "search",
-        query: query,
-        depth: depth,
-        max_results: maxResults,
-        session_id: currentSearchId
-      };
-      
-      console.log("📤 Sending WebSocket message:", message);
-      searchWebSocket.send(JSON.stringify(message));
-    } else {
-      console.error("❌ WebSocket not connected. State:", searchWebSocket?.readyState);
-      showError('WebSocket connection failed. Using fallback REST API...');
-      // Fallback to REST API
-      fallbackRestSearch(query, depth, maxResults, searchBtn);
-    }
-  }, 500);
+async function initializeAndSearch(query, depth, maxResults) {
+  return new Promise((resolve, reject) => {
+    initializeWebSocket();
+    
+    // Wait for connection and send message
+    const checkAndSend = () => {
+      if (searchWebSocket && searchWebSocket.readyState === WebSocket.OPEN) {
+        const message = {
+          type: "search",
+          query: query,
+          depth: depth,
+          max_results: maxResults,
+          session_id: currentSearchId
+        };
+        searchWebSocket.send(JSON.stringify(message));
+        resolve();
+      } else if (searchWebSocket && searchWebSocket.readyState === WebSocket.CONNECTING) {
+        setTimeout(checkAndSend, 100);
+      } else {
+        reject(new Error("WebSocket connection failed"));
+      }
+    };
+    
+    setTimeout(checkAndSend, 100);
+  });
 }
 
 function initializeWebSocket() {

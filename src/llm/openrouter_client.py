@@ -29,6 +29,19 @@ class OpenRouterClient:
         
         self.conversation_history = []
         print(f"✅ OpenRouter initialized with: {model_name}")
+    
+    def get_model_info(self):
+        """Get current model info"""
+        return {
+            "provider": "OpenRouter",
+            "model": self.model_name,
+            "fallback_models": self.fallback_models
+        }
+    
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
+        print("✅ Conversation history cleared")
         
     def _validate_response(self, text: str) -> bool:
         """
@@ -85,6 +98,63 @@ class OpenRouterClient:
                     return False
         
         return True
+    
+    def _build_simple_prompt(self, user_query: str, search_results: Optional[List[Dict]] = None) -> str:
+        """Build a simple, clear prompt"""
+        prompt_parts = []
+        
+        # Add search results if available
+        if search_results:
+            prompt_parts.append("Based on the following search results:\n")
+            for i, result in enumerate(search_results, 1):
+                prompt_parts.append(f"\n### Source {i}: {result.get('title', 'No title')}")
+                
+                # Use content if available, otherwise use snippet
+                content = result.get('content', result.get('snippet', 'No content'))
+                # Limit content length to avoid huge prompts
+                if len(content) > 800:
+                    content = content[:800] + "..."
+                prompt_parts.append(f"Content: {content}\n")
+        
+        # Add the user's question
+        prompt_parts.append(f"\nAnswer this question: {user_query}")
+        prompt_parts.append("\nProvide a clear, direct, and informative answer based on the search results above.")
+        
+        return "\n".join(prompt_parts)
+    
+    def _generate_fallback_response(self, prompt: str, search_results: Optional[List[Dict]] = None) -> str:
+        """Generate a fallback response when all models fail"""
+        if search_results and len(search_results) > 0:
+            # Try to extract key information from search results
+            response = f"Based on the search results for '{prompt}':\n\n"
+            
+            for i, result in enumerate(search_results[:3], 1):
+                title = result.get('title', '')
+                snippet = result.get('snippet', result.get('content', ''))[:200]
+                if title or snippet:
+                    response += f"{i}. {title}\n"
+                    if snippet:
+                        response += f"   {snippet}...\n\n"
+            
+            return response.strip()
+        else:
+            return f"I apologize, but I'm having trouble generating a response for '{prompt}'. Please try again or rephrase your question."
+    
+    async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
+        """Generate related search queries for deeper research"""
+        # Simple query variations without calling the API
+        variations = [
+            user_query,
+            f"{user_query} explained",
+            f"how {user_query}",
+            f"{user_query} examples",
+            f"best {user_query}",
+            f"{user_query} tutorial",
+            f"what is {user_query}"
+        ]
+        
+        # Return the requested number of variations
+        return variations[:num_queries]
     
     async def generate_response(
         self,

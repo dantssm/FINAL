@@ -8,7 +8,6 @@ import json
 from datetime import datetime
 import asyncio
 import httpx
-import numpy as np
 from src.config import config
 
 class EmbeddingProvider:
@@ -24,11 +23,12 @@ class LocalEmbeddings(EmbeddingProvider):
         print(f"📥 Loading local embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
         
-        # Enable GPU if available
-        if self.model.device.type == 'cuda':
-            print("✅ GPU acceleration enabled!")
-        else:
-            print("⚠️  Using CPU (slower). Consider using cloud embeddings.")
+        # Check for GPU
+        if hasattr(self.model.device, 'type'):
+            if self.model.device.type == 'cuda':
+                print("✅ GPU acceleration enabled!")
+            else:
+                print("⚠️  Using CPU (slower). Consider using cloud embeddings.")
     
     async def encode(self, texts: List[str]) -> List[List[float]]:
         # Run in thread pool to avoid blocking
@@ -84,35 +84,29 @@ class VoyageEmbeddings(EmbeddingProvider):
     """FREE Voyage AI embeddings"""
     
     def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.base_url = "https://api.voyageai.com/v1/embeddings"
-        print("✅ Using Voyage AI embeddings")
+        try:
+            import voyageai
+            self.client = voyageai.Client(api_key=api_key)
+            print("✅ Using Voyage AI embeddings")
+        except ImportError:
+            print("❌ Voyage AI library not installed")
+            raise
     
     async def encode(self, texts: List[str]) -> List[List[float]]:
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    self.base_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "input": texts,
-                        "model": "voyage-lite-01"  # Free model
-                    },
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                data = response.json()
-                return [item["embedding"] for item in data["data"]]
-                
-            except Exception as e:
-                print(f"❌ Voyage embedding failed: {e}")
-                # Fallback to local
-                print("🔄 Falling back to local embeddings")
-                local = LocalEmbeddings()
-                return await local.encode(texts)
+        try:
+            # Use the voyageai client
+            result = await asyncio.to_thread(
+                self.client.embed,
+                texts,
+                model="voyage-lite-02-instruct"
+            )
+            return result.embeddings
+        except Exception as e:
+            print(f"❌ Voyage embedding failed: {e}")
+            # Fallback to local
+            print("🔄 Falling back to local embeddings")
+            local = LocalEmbeddings()
+            return await local.encode(texts)
 
 class VectorStore:
     """
@@ -143,7 +137,7 @@ class VectorStore:
             )
         )
         
-        # Create collection
+        # Create or get collection
         try:
             self.collection = self.client.get_collection("deep_search_docs")
             # Check if dimensions match
@@ -163,6 +157,22 @@ class VectorStore:
             )
         
         print(f"✅ Vector store ready ({self.collection.count()} docs)")
+    
+    def clear_all(self):
+        """Clear all documents from the collection"""
+        try:
+            self.client.delete_collection("deep_search_docs")
+            self.collection = self.client.create_collection(
+                name="deep_search_docs",
+                metadata={
+                    "description": "Optimized document store",
+                    "hnsw:space": "cosine",
+                    "embedding_dimension": self.embedding_dimension
+                }
+            )
+            print("✅ Vector store cleared")
+        except Exception as e:
+            print(f"❌ Error clearing vector store: {e}")
     
     async def add_document(
         self,
@@ -330,4 +340,23 @@ class VectorStore:
                 else:
                     current_chunk = para + "\n\n"
         
-        # Add final
+        # Add final chunk
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        # If no chunks created, fall back to simple splitting
+        if not chunks:
+            for i in range(0, len(text), chunk_size - overlap):
+                chunk = text[i:i + chunk_size]
+                if chunk:
+                    chunks.append(chunk)
+        
+        return chunks
+    
+    def get_stats(self) -> Dict:
+        """Get statistics about the vector store"""
+        return {
+            "total_documents": self.collection.count(),
+            "embedding_provider": config.EMBEDDING_PROVIDER,
+            "embedding_dimension": self.embedding_dimension
+        }
