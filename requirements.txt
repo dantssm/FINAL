@@ -1,10 +1,23 @@
-httpx[http2]
-python-dotenv
-fastapi
-uvicorn
-selectolax
-chromadb
-sentence-transformers
-aiofiles
-orjson
-tenacity
+# Core dependencies
+httpx[http2]==0.27.2
+python-dotenv==1.0.0
+fastapi==0.115.5
+uvicorn==0.32.1
+selectolax==0.3.21
+chromadb==0.5.0
+sentence-transformers==3.0.1
+aiofiles==24.1.0
+orjson==3.10.12
+tenacity==9.0.0
+
+# Optional for cloud embeddings (uncomment if using)
+# cohere==5.11.4  # For Cohere embeddings
+voyageai==0.2.3
+
+# Optional for better performance
+# torch  # For GPU acceleration (if you have NVIDIA GPU)
+# numpy>=1.24.0
+
+# Development/Testing (optional)
+# pytest==8.3.3
+# pytest-asyncio==0.24.0
