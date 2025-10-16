@@ -108,6 +108,98 @@ class VoyageEmbeddings(EmbeddingProvider):
             local = LocalEmbeddings()
             return await local.encode(texts)
 
+class HuggingFaceEmbeddings(EmbeddingProvider):
+    """FREE HuggingFace Inference API embeddings"""
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        # Using sentence-transformers model via HF Inference API
+        self.model_id = "sentence-transformers/all-MiniLM-L6-v2"
+        self.api_url = f"https://api-inference.huggingface.co/models/{self.model_id}"
+        print("✅ Using HuggingFace embeddings (FREE tier)")
+    
+    async def encode(self, texts: List[str]) -> List[List[float]]:
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "inputs": texts,
+                        "options": {"wait_for_model": True}
+                    },
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                
+                # HF returns embeddings directly
+                embeddings = response.json()
+                
+                # Ensure it's in the right format
+                if isinstance(embeddings[0], list):
+                    return embeddings
+                else:
+                    # Sometimes returns a different format
+                    return [emb for emb in embeddings]
+                    
+            except Exception as e:
+                print(f"❌ HuggingFace embedding failed: {e}")
+                # Fallback to local
+                print("🔄 Falling back to local embeddings")
+                local = LocalEmbeddings()
+                return await local.encode(texts)
+
+class MixedbreadEmbeddings(EmbeddingProvider):
+    """FREE Mixedbread AI embeddings - 25M tokens/month free!"""
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://api.mixedbread.ai/v1/embeddings"
+        print("✅ Using Mixedbread AI embeddings (25M tokens/month FREE!)")
+        print("   Model: mxbai-embed-large-v1 (1024 dimensions)")
+    
+    async def encode(self, texts: List[str]) -> List[List[float]]:
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    self.base_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "input": texts,
+                        "model": "mxbai-embed-large-v1",  # Their best model
+                        "encoding_format": "float",
+                        "normalized": True  # Return normalized embeddings
+                    },
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract embeddings from response
+                embeddings = [item["embedding"] for item in data["data"]]
+                print(f"✅ Embedded {len(texts)} text chunks successfully")
+                return embeddings
+                
+            except httpx.HTTPStatusError as e:
+                print(f"❌ Mixedbread API error: {e.response.status_code}")
+                print(f"   Response: {e.response.text}")
+                # Fallback to local
+                print("🔄 Falling back to local embeddings")
+                local = LocalEmbeddings()
+                return await local.encode(texts)
+            except Exception as e:
+                print(f"❌ Mixedbread embedding failed: {e}")
+                # Fallback to local
+                print("🔄 Falling back to local embeddings")
+                local = LocalEmbeddings()
+                return await local.encode(texts)
+
 class VectorStore:
     """
     OPTIMIZED vector store with multiple embedding providers
@@ -117,7 +209,13 @@ class VectorStore:
         """Initialize with configured embedding provider"""
         
         # Choose embedding provider based on config
-        if config.EMBEDDING_PROVIDER == "cohere" and config.COHERE_API_KEY:
+        if config.EMBEDDING_PROVIDER == "mixedbread" and config.MIXEDBREAD_API_KEY:
+            self.embedder = MixedbreadEmbeddings(config.MIXEDBREAD_API_KEY)
+            self.embedding_dimension = 1024  # mxbai-embed-large-v1 dimension
+        elif config.EMBEDDING_PROVIDER == "huggingface" and config.HUGGINGFACE_API_KEY:
+            self.embedder = HuggingFaceEmbeddings(config.HUGGINGFACE_API_KEY)
+            self.embedding_dimension = 384
+        elif config.EMBEDDING_PROVIDER == "cohere" and config.COHERE_API_KEY:
             self.embedder = CohereEmbeddings(config.COHERE_API_KEY)
             self.embedding_dimension = 1024
         elif config.EMBEDDING_PROVIDER == "voyage" and config.VOYAGE_API_KEY:
@@ -137,37 +235,46 @@ class VectorStore:
             )
         )
         
-        # Create or get collection
+        # Create or get collection with dimension check
+        collection_name = f"deep_search_docs_{config.EMBEDDING_PROVIDER}"
+        
         try:
-            self.collection = self.client.get_collection("deep_search_docs")
+            self.collection = self.client.get_collection(collection_name)
             # Check if dimensions match
             sample_embedding = self.collection.get(limit=1)
             if sample_embedding['embeddings'] and len(sample_embedding['embeddings'][0]) != self.embedding_dimension:
-                print("⚠️ Embedding dimension mismatch, recreating collection")
-                self.client.delete_collection("deep_search_docs")
+                print(f"⚠️  Embedding dimension mismatch, recreating collection for {config.EMBEDDING_PROVIDER}")
+                self.client.delete_collection(collection_name)
                 raise ValueError("Dimension mismatch")
         except:
+            # Create new collection
             self.collection = self.client.create_collection(
-                name="deep_search_docs",
+                name=collection_name,
                 metadata={
-                    "description": "Optimized document store",
+                    "description": f"Document store using {config.EMBEDDING_PROVIDER}",
                     "hnsw:space": "cosine",
-                    "embedding_dimension": self.embedding_dimension
+                    "embedding_dimension": self.embedding_dimension,
+                    "embedding_provider": config.EMBEDDING_PROVIDER
                 }
             )
+            print(f"📁 Created new collection: {collection_name}")
         
         print(f"✅ Vector store ready ({self.collection.count()} docs)")
+        print(f"   Provider: {config.EMBEDDING_PROVIDER}")
+        print(f"   Dimensions: {self.embedding_dimension}")
     
     def clear_all(self):
         """Clear all documents from the collection"""
         try:
-            self.client.delete_collection("deep_search_docs")
+            collection_name = f"deep_search_docs_{config.EMBEDDING_PROVIDER}"
+            self.client.delete_collection(collection_name)
             self.collection = self.client.create_collection(
-                name="deep_search_docs",
+                name=collection_name,
                 metadata={
-                    "description": "Optimized document store",
+                    "description": f"Document store using {config.EMBEDDING_PROVIDER}",
                     "hnsw:space": "cosine",
-                    "embedding_dimension": self.embedding_dimension
+                    "embedding_dimension": self.embedding_dimension,
+                    "embedding_provider": config.EMBEDDING_PROVIDER
                 }
             )
             print("✅ Vector store cleared")
@@ -198,7 +305,8 @@ class VectorStore:
             "title": title,
             "query": query,
             "timestamp": datetime.now().isoformat(),
-            "content_length": len(content)
+            "content_length": len(content),
+            "embedding_provider": config.EMBEDDING_PROVIDER
         }
         if metadata:
             doc_metadata.update(metadata)
@@ -213,7 +321,7 @@ class VectorStore:
         # Limit chunks to avoid overwhelming the system
         if len(chunks) > 10:
             chunks = chunks[:10]
-            print(f"⚠️ Limited to 10 chunks for performance")
+            print(f"⚠️  Limited to 10 chunks for performance")
         
         # Generate embeddings
         embeddings = await self.embedder.encode(chunks)
@@ -245,6 +353,7 @@ class VectorStore:
         """Semantic search with reranking"""
         
         # Generate query embedding
+        print(f"🔍 Searching for: {query[:50]}...")
         query_embeddings = await self.embedder.encode([query])
         query_embedding = query_embeddings[0]
         

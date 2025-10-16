@@ -20,7 +20,7 @@ class Config:
     USE_JINA_READER = os.getenv("USE_JINA_READER", "true").lower() == "true"
     
     # Embeddings configuration
-    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")  # local, cohere, voyage
+    EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")  # local, cohere, voyage, huggingface, mixedbread
     
     # Local embeddings (FREE but slower)
     LOCAL_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -30,6 +30,12 @@ class Config:
     
     # Voyage AI embeddings (FREE tier available)  
     VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
+    
+    # HuggingFace embeddings (FREE tier)
+    HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
+    
+    # Mixedbread AI embeddings (FREE: 25M tokens/month!)
+    MIXEDBREAD_API_KEY = os.getenv("MIXEDBREAD_API_KEY", "")
     
     # Cache settings
     CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "24"))
@@ -48,6 +54,20 @@ class Config:
             raise ValueError("GOOGLE_SEARCH_API_KEY not found in .env")
         if not cls.GOOGLE_CSE_ID:
             raise ValueError("GOOGLE_CSE_ID not found in .env")
+        
+        # Check embedding provider configuration
+        if cls.EMBEDDING_PROVIDER == "mixedbread" and not cls.MIXEDBREAD_API_KEY:
+            print("⚠️  WARNING: Mixedbread selected but no API key provided. Falling back to local.")
+            cls.EMBEDDING_PROVIDER = "local"
+        elif cls.EMBEDDING_PROVIDER == "cohere" and not cls.COHERE_API_KEY:
+            print("⚠️  WARNING: Cohere selected but no API key provided. Falling back to local.")
+            cls.EMBEDDING_PROVIDER = "local"
+        elif cls.EMBEDDING_PROVIDER == "huggingface" and not cls.HUGGINGFACE_API_KEY:
+            print("⚠️  WARNING: HuggingFace selected but no API key provided. Falling back to local.")
+            cls.EMBEDDING_PROVIDER = "local"
+        elif cls.EMBEDDING_PROVIDER == "voyage" and not cls.VOYAGE_API_KEY:
+            print("⚠️  WARNING: Voyage selected but no API key provided. Falling back to local.")
+            cls.EMBEDDING_PROVIDER = "local"
             
         print("✅ Configuration loaded successfully")
         print(f"   LLM: {cls.OPENROUTER_MODEL}")
