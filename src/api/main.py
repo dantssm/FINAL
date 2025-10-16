@@ -1,4 +1,4 @@
-# src/api/main.py
+# src/api/main.py - FastAPI server
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from src.api.websocket_manager import manager
 app = FastAPI(
     title="AI Deep Search Engine - OPTIMIZED FREE",
     description="Lightning-fast deep search with FREE services only",
-    version="3.0.0"
+    version="3.0.1"
 )
 
 # Enable CORS
@@ -84,14 +84,18 @@ async def websocket_search(websocket: WebSocket):
                     continue
                 
                 print(f"🔍 WebSocket search: {query}")
+                print(f"   Depth: {depth} (will generate {depth + 1} queries)")
+                print(f"   Max results: {max_results} per query")
                 
                 try:
+                    # Use HTML format for WebSocket (web interface)
                     result = await pipeline.search(
                         query=query,
                         session_id=session_id,
                         depth=depth,
                         max_results_per_search=max_results,
-                        websocket=websocket
+                        websocket=websocket,
+                        return_format="html"  # HTML for web display
                     )
                     
                     # Result already sent via WebSocket
@@ -100,6 +104,17 @@ async def websocket_search(websocket: WebSocket):
                     await manager.send_message(websocket, {
                         "type": "error",
                         "message": f"Search failed: {str(e)}"
+                    })
+            
+            # Handle session end
+            elif data.get("type") == "end_session":
+                session_id = data.get("session_id", "")
+                if session_id:
+                    print(f"👋 Ending session: {session_id[:12]}...")
+                    pipeline.end_session(session_id)
+                    await manager.send_message(websocket, {
+                        "type": "session_ended",
+                        "message": "Session ended and cache cleared"
                     })
                     
     except WebSocketDisconnect:
@@ -120,10 +135,16 @@ async def root():
 async def search(request: SearchRequest):
     """Perform deep search (REST endpoint)"""
     try:
+        print(f"\n🔍 REST API search: {request.query}")
+        print(f"   Depth: {request.depth} (will generate {request.depth + 1} queries)")
+        print(f"   Max results: {request.max_results} per query")
+        
+        # Use text format for REST API (no HTML tags)
         result = await pipeline.search(
             query=request.query,
             depth=request.depth,
-            max_results_per_search=request.max_results
+            max_results_per_search=request.max_results,
+            return_format="text"  # Plain text for API
         )
         return SearchResponse(
             query=result['query'],
@@ -144,10 +165,12 @@ async def chat(request: ChatRequest):
         if request.session_id not in chat_sessions:
             chat_sessions[request.session_id] = []
         
+        # Use text format for chat API
         response = await pipeline.chat(
             message=request.message,
             session_id=request.session_id,
-            use_search=request.use_search
+            use_search=request.use_search,
+            return_format="text"  # Plain text for API
         )
         
         chat_sessions[request.session_id].append({
@@ -162,6 +185,24 @@ async def chat(request: ChatRequest):
             session_id=request.session_id,
             timestamp=datetime.now().isoformat()
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/session/{session_id}")
+async def end_session(session_id: str):
+    """End a session and clear its cache"""
+    try:
+        print(f"\n👋 API request to end session: {session_id[:12]}...")
+        pipeline.end_session(session_id)
+        
+        if session_id in chat_sessions:
+            del chat_sessions[session_id]
+        
+        return {
+            "status": "success",
+            "message": f"Session {session_id[:12]} ended and cache cleared",
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -192,7 +233,7 @@ async def clear_cache():
     await pipeline.cache.clear_all()
     return {
         "status": "success",
-        "message": "Cache cleared",
+        "message": "All cache cleared",
         "timestamp": datetime.now().isoformat()
     }
 

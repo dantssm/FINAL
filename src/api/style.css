@@ -120,8 +120,8 @@ h1 {
 .chat-sources {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: 6px 0 18px;
+  gap: 8px;
+  margin: 10px 0;
 }
 
 .chat-source-btn {
@@ -130,8 +130,8 @@ h1 {
   color: #fff !important;
   border: none;
   border-radius: 999px;
-  padding: 6px 16px;
-  font-size: 14px;
+  padding: 6px 14px;
+  font-size: 13px;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
@@ -148,4 +148,43 @@ h1 {
 .chat-source-btn:active {
   transform: translateY(0);
   box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.options {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.option select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 2px solid #e9e6ef;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+}
+
+#status-log {
+  margin-top: 16px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #f9fafb;
+  padding: 12px;
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 13px;
 }

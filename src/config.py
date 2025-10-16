@@ -1,4 +1,4 @@
-# src/config.py - OPTIMIZED Configuration
+# src/config.py - FIXED: Session-only cache configuration
 from dotenv import load_dotenv
 import os
 
@@ -31,22 +31,21 @@ class Config:
     JINA_API_KEY = os.getenv("JINA_API_KEY", "")
     TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY", "")
     
-    # Cache settings - OPTIMIZED
-    CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "168"))  # 7 days instead of 24h
-    MAX_CACHE_SIZE = int(os.getenv("MAX_CACHE_SIZE", "5000"))   # Increased from 1000
-    CACHE_FILE = os.getenv("CACHE_FILE", "./data/cache.pkl")    # Persistent cache
+    # Cache settings - SESSION ONLY (no persistence)
+    CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "24"))  # 24h TTL per session
+    MAX_CACHE_SIZE = int(os.getenv("MAX_CACHE_SIZE", "5000"))   # 5000 entries per session
     
-    # Performance settings - OPTIMIZED
-    MAX_CONCURRENT_SCRAPES = int(os.getenv("MAX_CONCURRENT_SCRAPES", "10"))  # Increased from 5
-    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))           # Increased from 600
-    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))      # Reduced from 100
+    # Performance settings
+    MAX_CONCURRENT_SCRAPES = int(os.getenv("MAX_CONCURRENT_SCRAPES", "10"))
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))
+    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
     
-    # Search optimization - NEW
-    MAX_SEARCH_QUERIES = int(os.getenv("MAX_SEARCH_QUERIES", "4"))
-    MAX_URLS_TO_SCRAPE = int(os.getenv("MAX_URLS_TO_SCRAPE", "10"))
-    MAX_CHUNKS_FOR_LLM = int(os.getenv("MAX_CHUNKS_FOR_LLM", "20"))
+    # Search optimization - REMOVED hard limits to respect user parameters
+    MAX_SEARCH_QUERIES = int(os.getenv("MAX_SEARCH_QUERIES", "10"))  # Increased from 4
+    MAX_URLS_TO_SCRAPE = int(os.getenv("MAX_URLS_TO_SCRAPE", "30"))  # Increased from 10
+    MAX_CHUNKS_FOR_LLM = int(os.getenv("MAX_CHUNKS_FOR_LLM", "30"))  # Increased from 20
     
-    # Timeout settings - NEW
+    # Timeout settings
     SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", "15"))
     SCRAPE_TIMEOUT = int(os.getenv("SCRAPE_TIMEOUT", "15"))
     LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
@@ -80,7 +79,7 @@ class Config:
         print(f"   LLM: {cls.OPENROUTER_MODEL}")
         print(f"   Embeddings: {cls.EMBEDDING_PROVIDER}")
         print(f"   Jina Reader: {'Enabled' if cls.USE_JINA_READER else 'Disabled'}")
-        print(f"   Cache: {cls.MAX_CACHE_SIZE} entries, {cls.CACHE_TTL_HOURS}h TTL")
+        print(f"   Cache: SESSION-ONLY (no persistence), {cls.MAX_CACHE_SIZE} entries, {cls.CACHE_TTL_HOURS}h TTL")
         print(f"   Performance: {cls.MAX_CONCURRENT_SCRAPES} concurrent scrapes, {cls.CHUNK_SIZE} chunk size")
         
         # Warn about using DeepSeek

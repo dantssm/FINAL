@@ -1,11 +1,6 @@
-# src/pipeline/deep_search.py - OPTIMIZED VERSION
+# src/pipeline/deep_search.py - FIXED: Proper depth and max_results handling
 """
-OPTIMIZED Deep Search Pipeline with:
-- Batch embeddings (5-10x faster)
-- Connection pooling (2x faster scraping)
-- Persistent cache (instant cached results)
-- Better query generation
-- RAG retrieval
+Deep Search Pipeline with proper text/HTML formatting and fixed parameters
 """
 
 import asyncio
@@ -24,24 +19,35 @@ from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
 
 
-def format_answer(raw_answer: str, sources: list) -> str:
+def format_answer_html(raw_answer: str, sources: list) -> str:
     """
-    Формує HTML-відповідь з абзацами та кнопками-джерелами після кожного абзацу.
-    URL беруться з 'Source N(https://...)' або з search_results.
-    Після генерації кнопок усі посилання (https...) у тексті видаляються.
+    Format answer as HTML for web display with CLEAR source citations.
+    Shows source numbers with domains and full reference list at the end.
     """
     if not raw_answer:
         return ""
 
-    # 🔹 Мапа Source N → URL (fallback із search_results)
-    url_map = {i: r.get("url") or r.get("link") or "#" for i, r in enumerate(sources, 1)}
+    # Build source map: Source N → {url, title, domain}
+    source_map = {}
+    for i, r in enumerate(sources, 1):
+        url = r.get("url") or r.get("link") or "#"
+        title = r.get("title", "Untitled")
+        
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace("www.", "")
+        
+        source_map[i] = {
+            "url": url,
+            "title": title,
+            "domain": domain
+        }
 
-    # 🔹 Знайти всі Source N(https://...) і видалити URL з тексту
+    # Extract inline URLs from "Source N(https://...)" and update map
     def extract_inline_urls(match):
         n = int(match.group(1))
         url = match.group(2).strip()
-        url_map[n] = url
-        # Повертаємо тільки "Source N" без URL
+        if n in source_map:
+            source_map[n]["url"] = url
         return f"Source {n}"
 
     cleaned_text = re.sub(
@@ -50,39 +56,119 @@ def format_answer(raw_answer: str, sources: list) -> str:
         raw_answer
     )
 
-    # 🔹 Розбиваємо на абзаци
+    # Remove any remaining bare URLs
+    cleaned_text = re.sub(r'https?://[^\s)]+', '', cleaned_text)
+
+    # Remove artifact tags
+    cleaned_text = re.sub(r'<｜begin▁of▁sentence｜>', '', cleaned_text)
+    cleaned_text = re.sub(r'<｜end▁of▁sentence｜>', '', cleaned_text)
+
+    # Split into paragraphs
     paragraphs = [p.strip() for p in cleaned_text.split("\n\n") if p.strip()]
 
     html = "<div class='chat-block'>"
 
+    # Track which sources were actually referenced
+    referenced_sources = set()
+
     for p in paragraphs:
+        # Clean markdown formatting
         clean_p = re.sub(r"[*_#>`]", "", p).strip()
+        
         html += f"<p>{clean_p}</p>"
 
-        # Знайти всі згадки Source N
+        # Find all Source N mentions
         found = re.findall(r"Source\s+(\d+)", clean_p)
         found_unique = sorted(set(int(n) for n in found if n.isdigit()))
+        
+        # Track referenced sources
+        referenced_sources.update(found_unique)
 
-        # Додаємо кнопки
+        # Add inline source buttons after paragraph (with numbers!)
         if found_unique:
-            html += "<div class='chat-sources'>"
+            html += "<div class='chat-sources' style='margin: 8px 0;'>"
             for n in found_unique:
-                url = url_map.get(n, "#")
+                if n not in source_map:
+                    continue
+                    
+                source = source_map[n]
+                url = source["url"]
+                domain = source["domain"]
+                
                 if not url.startswith("http"):
                     continue
 
-                parsed = urlparse(url)
-                domain = parsed.netloc.replace("www.", "")
-                label = f"🌐 {domain}"
-
+                # Button with source number AND domain
                 html += (
-                    f'<a href="{url}" class="chat-source-btn" title="{domain}" '
-                    f'target="_blank" rel="noopener noreferrer">{label}</a>'
+                    f'<a href="{url}" class="chat-source-btn" '
+                    f'title="{source["title"]}" '
+                    f'target="_blank" rel="noopener noreferrer">'
+                    f'[{n}] {domain}</a>'
                 )
             html += "</div>"
 
+    # Add comprehensive "Sources Referenced" section at the end
+    if referenced_sources:
+        html += "<div style='margin-top: 24px; padding-top: 16px; border-top: 2px solid #e5e7eb;'>"
+        html += "<h3 style='font-size: 16px; font-weight: 700; margin-bottom: 12px; color: #374151;'>📚 Sources Referenced:</h3>"
+        
+        for n in sorted(referenced_sources):
+            if n not in source_map:
+                continue
+                
+            source = source_map[n]
+            url = source["url"]
+            title = source["title"]
+            domain = source["domain"]
+            
+            if not url.startswith("http"):
+                continue
+            
+            # Each source with number, title, and domain
+            html += f"<div style='margin-bottom: 10px; padding: 8px; background: #f9fafb; border-radius: 6px;'>"
+            html += f"<div style='font-weight: 600; color: #8b5cf6;'>[{n}] {title[:80]}</div>"
+            html += (
+                f"<a href='{url}' target='_blank' rel='noopener noreferrer' "
+                f"style='font-size: 13px; color: #6b7280; text-decoration: none;'>"
+                f"🔗 {domain}</a>"
+            )
+            html += "</div>"
+        
+        html += "</div>"
+
     html += "</div>"
     return html
+
+
+def format_answer_text(raw_answer: str) -> str:
+    """
+    Format answer as plain text (no HTML).
+    Removes HTML tags and cleans up formatting.
+    """
+    if not raw_answer:
+        return ""
+
+    # Remove HTML tags if any
+    text = re.sub(r'<[^>]+>', '', raw_answer)
+    
+    # Remove markdown formatting
+    text = re.sub(r'[*_#>`]', '', text)
+    
+    # Remove artifact tags
+    text = re.sub(r'<｜begin▁of▁sentence｜>', '', text)
+    text = re.sub(r'<｜end▁of▁sentence｜>', '', text)
+    
+    # Clean up Source N(URL) references - keep just "Source N"
+    text = re.sub(r'Source\s+(\d+)\s*\(https?://[^\s)]+\)', r'Source \1', text)
+    
+    # Remove any remaining bare URLs
+    text = re.sub(r'https?://[^\s]+', '', text)
+    
+    # Clean up whitespace
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    return text
 
 
 class SearchLogger:
@@ -171,7 +257,8 @@ class SessionManager:
 
 class DeepSearchPipeline:
     """
-    OPTIMIZED Deep Search Pipeline
+    Deep Search Pipeline with proper text/HTML formatting
+    FIXED: Depth and max_results now work correctly!
     """
     
     def __init__(self):
@@ -181,14 +268,13 @@ class DeepSearchPipeline:
         
         config.validate()
         
-        # Initialize cache with persistence
-        print("\n📦 Setting up persistent cache system...")
+        # Initialize cache WITHOUT persistence
+        print("\n📦 Setting up session-based cache system...")
         self.cache = MemoryCache(
             default_ttl_hours=config.CACHE_TTL_HOURS,
-            max_size=config.MAX_CACHE_SIZE,
-            cache_file=config.CACHE_FILE
+            max_size=config.MAX_CACHE_SIZE
         )
-        print(f"   ✅ Persistent cache ready: {config.MAX_CACHE_SIZE} entries, {config.CACHE_TTL_HOURS}h TTL")
+        print(f"   ✅ Session cache ready: {config.MAX_CACHE_SIZE} entries max")
         
         # Initialize cached searcher
         print("\n🔍 Setting up Google Search...")
@@ -197,7 +283,7 @@ class DeepSearchPipeline:
             config.GOOGLE_CSE_ID,
             self.cache
         )
-        print(f"   ✅ Google Search ready with caching")
+        print(f"   ✅ Google Search ready with session caching")
         
         # Use Jina AI Reader with connection pooling
         print("\n🌐 Setting up web scraper...")
@@ -222,15 +308,6 @@ class DeepSearchPipeline:
         
         print("\n" + "="*60)
         print("✅ OPTIMIZED DEEP SEARCH PIPELINE READY!")
-        print("="*60)
-        print(f"Configuration Summary:")
-        print(f"  • LLM Model: {config.OPENROUTER_MODEL}")
-        print(f"  • Embeddings: {config.EMBEDDING_PROVIDER}")
-        print(f"  • Web Scraper: Jina AI Reader (connection pooling)")
-        print(f"  • Cache: Persistent ({config.MAX_CACHE_SIZE} entries, {config.CACHE_TTL_HOURS}h)")
-        print(f"  • Chunk Size: {config.CHUNK_SIZE} chars (overlap: {config.CHUNK_OVERLAP})")
-        print(f"  • Concurrent Scrapes: {config.MAX_CONCURRENT_SCRAPES}")
-        print(f"  • Optimization: Batch embeddings enabled ⚡")
         print("="*60 + "\n")
     
     async def _send_websocket_progress(self, websocket: Optional[WebSocket], message: dict):
@@ -259,10 +336,17 @@ class DeepSearchPipeline:
         depth: int = 2,
         max_results_per_search: int = 7,
         use_rag: bool = True,
-        websocket: Optional[WebSocket] = None
+        websocket: Optional[WebSocket] = None,
+        return_format: str = "html"  # "html" or "text"
     ) -> Dict:
         """
-        OPTIMIZED deep search with batch embeddings and RAG
+        Deep search with proper formatting
+        FIXED: depth and max_results_per_search now work correctly!
+        
+        Args:
+            depth: Number of search levels (1-5). Controls how many diverse queries are generated.
+            max_results_per_search: Maximum results to fetch per search query (1-15)
+            return_format: "html" for web display, "text" for plain text API responses
         """
         logger = SearchLogger()
         
@@ -280,9 +364,10 @@ class DeepSearchPipeline:
         logger.log("="*60)
         logger.log(f"Query: '{query}'")
         logger.log(f"Session ID: {session_id[:12]}...")
-        logger.log(f"Search Depth: {depth} levels")
+        logger.log(f"Search Depth: {depth} levels (will generate {depth + 1} diverse queries)")
         logger.log(f"Max Results per Search: {max_results_per_search}")
         logger.log(f"Using RAG: {use_rag}")
+        logger.log(f"Return format: {return_format}")
         logger.log(f"Using Model: {config.OPENROUTER_MODEL}")
         logger.log(f"Using Embeddings: {config.EMBEDDING_PROVIDER}")
         logger.log("="*60)
@@ -292,7 +377,7 @@ class DeepSearchPipeline:
         
         all_search_results = []
         
-        # OPTIMIZATION 1: Generate queries with limits
+        # FIXED: Use user's depth parameter directly
         await self._send_websocket_progress(websocket, {
             "type": "status",
             "message": "🧠 Planning search strategy...",
@@ -300,8 +385,8 @@ class DeepSearchPipeline:
         })
         
         logger.log("\n🧠 PHASE 1: Query Generation", "PROGRESS")
-        num_queries = min(depth + 1, config.MAX_SEARCH_QUERIES)
-        logger.log(f"Generating diverse search queries (target: {num_queries} queries)...")
+        num_queries = depth + 1  # depth=1 -> 2 queries, depth=3 -> 4 queries, etc.
+        logger.log(f"Generating {num_queries} diverse search queries based on depth={depth}...")
         
         # Generate queries using improved LLM method
         search_queries = await self.llm_client.generate_search_queries(
@@ -325,7 +410,7 @@ class DeepSearchPipeline:
         for i, q in enumerate(search_queries, 1):
             logger.log(f"   {i}. {q}")
         
-        # OPTIMIZATION 2: Parallel search with timeout
+        # FIXED: Use user's max_results_per_search directly
         await self._send_websocket_progress(websocket, {
             "type": "status",
             "message": f"🔍 Searching {len(search_queries)} sources in parallel...",
@@ -334,12 +419,16 @@ class DeepSearchPipeline:
         
         logger.log(f"\n🔍 PHASE 2: Parallel Google Search", "PROGRESS")
         logger.log(f"Executing {len(search_queries)} searches concurrently...")
-        logger.log(f"Requesting {max_results_per_search} results per search...")
+        logger.log(f"Requesting {max_results_per_search} results per search (user specified)...")
         logger.log(f"Timeout: {config.SEARCH_TIMEOUT}s")
         
         # Run all Google searches concurrently with timeout
         search_tasks = [
-            self.google_searcher.search(q, num_results=max_results_per_search)
+            self.google_searcher.search(
+                q, 
+                num_results=max_results_per_search,  # FIXED: Use user's parameter
+                session_id=session_id  # Pass session_id for caching
+            )
             for q in search_queries
         ]
         
@@ -352,7 +441,7 @@ class DeepSearchPipeline:
             logger.log("⚠️  Search timeout, using partial results", "WARNING")
             all_results = []
         
-        # OPTIMIZATION 3: Deduplicate results
+        # Deduplicate results
         logger.log(f"\n📊 PHASE 3: Results Processing", "PROGRESS")
         seen_urls = set()
         unique_results = []
@@ -369,9 +458,17 @@ class DeepSearchPipeline:
         
         logger.log(f"✅ Total unique URLs found: {len(unique_results)}", "SUCCESS")
         
-        # OPTIMIZATION 4: Limit URLs to scrape
-        max_urls = min(len(unique_results), config.MAX_URLS_TO_SCRAPE)
-        top_urls = [r['link'] for r in unique_results[:max_urls]]
+        # FIXED: Calculate max URLs based on depth and max_results
+        # More depth = more queries = potentially more URLs to scrape
+        max_urls_to_scrape = min(
+            len(unique_results),
+            max_results_per_search * len(search_queries)  # Scale with queries
+        )
+        
+        # But also cap at a reasonable maximum
+        max_urls_to_scrape = min(max_urls_to_scrape, 30)  # Hard cap at 30
+        
+        top_urls = [r['link'] for r in unique_results[:max_urls_to_scrape]]
         
         await self._send_websocket_progress(websocket, {
             "type": "status",
@@ -383,11 +480,11 @@ class DeepSearchPipeline:
         logger.log(f"Scraping top {len(top_urls)} URLs with Jina Reader...")
         logger.log(f"Concurrent scrapes: {config.MAX_CONCURRENT_SCRAPES}")
         
-        scraped_content = await self.web_scraper.scrape_multiple(top_urls)
+        scraped_content = await self.web_scraper.scrape_multiple(top_urls, session_id=session_id)
         
         logger.log(f"✅ Successfully scraped {len(scraped_content)}/{len(top_urls)} pages", "SUCCESS")
         
-        # OPTIMIZATION 5: Batch add all documents (ONE embedding call!)
+        # Batch add all documents
         logger.log(f"\n💾 PHASE 5: Batch Knowledge Base Update", "PROGRESS")
         
         documents_to_add = []
@@ -410,7 +507,7 @@ class DeepSearchPipeline:
             logger.log(f"✅ Batch add complete!", "SUCCESS")
             logger.log(f"📚 Total documents in store: {vector_store.get_stats()['total_documents']}")
         
-        # OPTIMIZATION 6: Use RAG to retrieve most relevant chunks
+        # Use RAG to retrieve most relevant chunks
         await self._send_websocket_progress(websocket, {
             "type": "status",
             "message": f"🧠 Searching vector store for most relevant content...",
@@ -419,24 +516,25 @@ class DeepSearchPipeline:
         
         logger.log(f"\n🧠 PHASE 6: RAG Retrieval", "PROGRESS")
         
+        # FIXED: Scale chunks with depth
+        max_chunks = min(config.MAX_CHUNKS_FOR_LLM, 10 + (depth * 5))  # More depth = more chunks
+        
         if use_rag and vector_store.get_stats()['total_documents'] > 0:
             logger.log(f"🔍 Performing semantic search in vector store...")
             logger.log(f"   Query: '{query}'")
-            logger.log(f"   Requesting top {config.MAX_CHUNKS_FOR_LLM} most relevant chunks...")
+            logger.log(f"   Requesting top {max_chunks} most relevant chunks (scaled by depth)...")
             
-            # Search vector store for most relevant chunks
-            rag_results = await vector_store.search(query, n_results=config.MAX_CHUNKS_FOR_LLM)
+            rag_results = await vector_store.search(query, n_results=max_chunks)
             
             logger.log(f"✅ Retrieved {len(rag_results)} relevant chunks from vector store", "SUCCESS")
             
             if rag_results:
                 logger.log(f"   Similarity scores: {rag_results[0]['similarity_score']:.3f} (top) to {rag_results[-1]['similarity_score']:.3f} (lowest)")
             
-            # Use RAG results if available
-            sources_for_llm = rag_results if rag_results else all_search_results[:config.MAX_CHUNKS_FOR_LLM]
+            sources_for_llm = rag_results if rag_results else all_search_results[:max_chunks]
         else:
             logger.log(f"⚠️  No vector store available, using all scraped sources", "WARNING")
-            sources_for_llm = all_search_results[:config.MAX_CHUNKS_FOR_LLM]
+            sources_for_llm = all_search_results[:max_chunks]
         
         await self._send_websocket_progress(websocket, {
             "type": "status",
@@ -460,10 +558,15 @@ class DeepSearchPipeline:
         
         logger.log(f"✅ Generated raw answer: {len(raw_answer)} characters")
 
-        answer = format_answer(raw_answer, all_search_results)
-        logger.log(f"✅ Formatted answer with HTML: {len(answer)} total chars (includes markup)")
+        # Format based on return type
+        if return_format == "html":
+            answer = format_answer_html(raw_answer, all_search_results)
+            logger.log(f"✅ Formatted answer as HTML: {len(answer)} total chars (includes markup)")
+        else:
+            answer = format_answer_text(raw_answer)
+            logger.log(f"✅ Formatted answer as plain text: {len(answer)} chars")
         
-        # Step 5: Store in session history
+        # Store in session history
         if session_id not in self.session_histories:
             self.session_histories[session_id] = []
         
@@ -490,7 +593,7 @@ class DeepSearchPipeline:
                     "url": r.get('url', r.get('link', '#')),
                     "snippet": r.get('content', r.get('snippet', ''))[:300]
                 }
-                for r in sources_for_llm[:10]  # Show top 10 sources used
+                for r in sources_for_llm[:10]
             ],
             "total_sources": len(all_search_results),
             "chunks_analyzed": len(sources_for_llm) if use_rag else 0,
@@ -513,7 +616,8 @@ class DeepSearchPipeline:
         logger.log(f"   • Total sources found: {result['total_sources']}")
         logger.log(f"   • Chunks analyzed by LLM: {result['chunks_analyzed']}")
         logger.log(f"   • Raw answer length: {len(raw_answer)} chars (LLM output)")
-        logger.log(f"   • Formatted answer: {len(answer)} chars (with HTML markup)")
+        logger.log(f"   • Formatted answer: {len(answer)} chars")
+        logger.log(f"   • Format type: {return_format}")
         logger.log(f"   • Cache entries: {cache_stats['active_entries']}/{cache_stats['total_entries']}")
         logger.log(f"   • Vector DB docs: {vector_stats['total_documents']}")
         logger.log(f"   • Embedding provider: {vector_stats['embedding_provider']}")
@@ -534,13 +638,15 @@ class DeepSearchPipeline:
         session_id: str,
         use_search: bool = True,
         use_rag: bool = True,
-        websocket: Optional[WebSocket] = None
+        websocket: Optional[WebSocket] = None,
+        return_format: str = "text"
     ) -> str:
         """Chat with session context"""
         print(f"\n💬 Starting chat in session {session_id[:12]}...")
         print(f"   Message: '{message[:60]}...'")
         print(f"   Use search: {use_search}")
         print(f"   Use RAG: {use_rag}")
+        print(f"   Return format: {return_format}")
         
         context = self._build_session_context(session_id)
         
@@ -552,7 +658,8 @@ class DeepSearchPipeline:
                 depth=1,
                 max_results_per_search=5,
                 use_rag=use_rag,
-                websocket=websocket
+                websocket=websocket,
+                return_format=return_format
             )
             print(f"✅ Chat search complete: {len(result['answer'])} chars")
             return result['answer']
@@ -580,6 +687,10 @@ class DeepSearchPipeline:
                     prompt=message,
                     context=context
                 )
+            
+            # Format response
+            if return_format == "text":
+                response = format_answer_text(response)
             return response
         else:
             print("💭 Using context only (no search, no RAG)")
@@ -587,6 +698,8 @@ class DeepSearchPipeline:
                 prompt=message,
                 context=context
             )
+            if return_format == "text":
+                response = format_answer_text(response)
             return response
     
     def _build_session_context(self, session_id: str) -> str:
@@ -599,9 +712,11 @@ class DeepSearchPipeline:
             return ""
         
         context_parts = []
-        for item in history[-5:]:  # Last 5 interactions
+        for item in history[-5:]:
             context_parts.append(f"Q: {item['query']}")
-            context_parts.append(f"A: {item['answer'][:800]}...")
+            # Strip HTML for context
+            clean_answer = format_answer_text(item['answer'])
+            context_parts.append(f"A: {clean_answer[:800]}...")
             context_parts.append("")
         
         return "\n".join(context_parts)
@@ -642,12 +757,18 @@ class DeepSearchPipeline:
     def end_session(self, session_id: str):
         """End a session and clean up its data"""
         print(f"\n👋 Ending session {session_id[:12]}...")
+        
+        # Delete vector store
         self.session_manager.delete_session(session_id)
         
+        # Clear session cache
+        asyncio.create_task(self.cache.clear_session(session_id))
+        
+        # Clear session history
         if session_id in self.session_histories:
             del self.session_histories[session_id]
         
-        print(f"✅ Session {session_id[:12]}... ended and cleaned up")
+        print(f"✅ Session {session_id[:12]}... ended and cleaned up (cache + vector store)")
     
     def clear_history(self):
         """Clear all session histories"""
