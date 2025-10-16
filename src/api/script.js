@@ -172,6 +172,34 @@ function updateProgress(message, current, total) {
   updateStatus(message + progress, 'progress');
 }
 
+function insertClickableSources(text, sources = []) {
+  // шукаємо патерн типу Source 1, Source 2...
+  return text.replace(/Source\s+(\d+)/g, (match, num) => {
+    const index = parseInt(num) - 1;
+    if (sources[index] && sources[index].url) {
+      const title = sources[index].title || `Source ${num}`;
+      const url = sources[index].url;
+      return `<a class="src-btn" href="${url}" target="_blank" rel="noopener">${title}</a>`;
+    }
+    return match;
+  });
+}
+
+function linkifySources(text) {
+  // 1️⃣ Замінюємо патерн типу Source 3(https://example.com)
+  text = text.replace(/Source\s+(\d+)\((https?:\/\/[^\s)]+)\)/g, (match, num, url) => {
+    return `<a class="src-btn" href="${url}" target="_blank" rel="noopener">Source ${num}</a>`;
+  });
+
+  // 2️⃣ Замінюємо ["..." – Source 3] на клікабельне, якщо треба
+  text = text.replace(/\["([^"]+)"\s*–\s*Source\s+(\d+)\]/g, (match, quote, num) => {
+    return `["${quote}" – <span class="src-btn-inline">Source ${num}</span>]`;
+  });
+
+  return text;
+}
+
+
 function displaySearchResults(data) {
   const resultsDiv = document.getElementById('results');
   
@@ -202,8 +230,8 @@ function displaySearchResults(data) {
     html += '<p>No answer returned.</p>';
   } else {
     uniqueParagraphs.forEach(p => {
-      const safe = escapeHtmlExceptMath(p).replace(/\n/g, '<br>');
-      html += '<p>' + safe + '</p>';
+      // не екрануємо HTML — дозволяємо теги <a>
+      html += '<p>' + insertClickableSources(p) + '</p>';
     });
   }
 
