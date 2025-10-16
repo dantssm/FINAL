@@ -3,3 +3,6 @@ data/
 venv/
 *.pyc
 .env
+*.pkl
+.DS_Store
+*.log
