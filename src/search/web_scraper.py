@@ -47,7 +47,6 @@ class WebScraper:
                     text = ' '.join(text.split())  # Remove extra whitespace
                     
                     # Limit length (for now, 5000 chars)
-                    text = text[:5000]
                     
                     print(f"✅ Scraped {len(text)} chars from {url[:50]}...")
                     return text

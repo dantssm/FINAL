@@ -1,10 +1,26 @@
-httpx[http2]
-python-dotenv
-fastapi
-uvicorn
-selectolax
-chromadb
-sentence-transformers
-aiofiles
-orjson
-tenacity
+# Core dependencies with compatible versions
+httpx[http2]==0.27.2
+python-dotenv==1.0.0
+fastapi==0.115.5
+uvicorn==0.32.1
+selectolax==0.3.21
+
+# Fix NumPy version for ChromaDB compatibility
+numpy==1.26.4
+chromadb==0.5.0
+
+# Embeddings
+sentence-transformers==3.0.1
+
+# Other dependencies
+aiofiles==24.1.0
+orjson==3.10.12
+tenacity==9.0.0
+
+# Optional for cloud embeddings (uncomment if using)
+# cohere==5.11.4  # For Cohere embeddings
+voyageai==0.2.3
+
+# Development/Testing (optional)
+# pytest==8.3.3
+# pytest-asyncio==0.24.0
