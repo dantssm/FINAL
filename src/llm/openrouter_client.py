@@ -1,4 +1,4 @@
-# src/llm/openrouter_client.py
+# src/llm/openrouter_client.py - IMPROVED QUERY GENERATION
 import httpx
 import json
 import re
@@ -8,13 +8,7 @@ import asyncio
 class OpenRouterClient:
     def __init__(self, api_key: str, model_name: str = "google/gemini-2.0-flash-exp:free"):
         """
-        Initialize OpenRouter client - SWITCHED TO MORE RELIABLE MODEL
-        
-        RECOMMENDED FREE Models (in order of reliability):
-        1. google/gemini-2.0-flash-exp:free (BEST - most reliable)
-        2. meta-llama/llama-3.2-3b-instruct:free 
-        3. qwen/qwen-2-7b-instruct:free
-        4. deepseek/deepseek-chat-v3.1:free (AVOID - produces gibberish)
+        Initialize OpenRouter client
         """
         self.api_key = api_key
         self.model_name = model_name
@@ -141,27 +135,141 @@ class OpenRouterClient:
             return f"I apologize, but I'm having trouble generating a response for '{prompt}'. Please try again or rephrase your question."
     
     async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
-        """Generate related search queries for deeper research"""
-        # Simple query variations without calling the API
-        variations = [
-            user_query,
-            f"{user_query} explained",
-            f"how {user_query}",
-            f"{user_query} examples",
-            f"best {user_query}",
-            f"{user_query} tutorial",
-            f"what is {user_query}"
-        ]
+        """
+        IMPROVED: Generate better search queries using the LLM
+        Falls back to smart variations if LLM fails
+        """
+        print(f"\n🧠 Generating {num_queries} search queries for: '{user_query}'")
         
-        # Return the requested number of variations
-        return variations[:num_queries]
+        # Try to use LLM for better query generation
+        prompt = f"""Generate {num_queries} diverse Google search queries to find comprehensive information about: "{user_query}"
+
+Requirements:
+- Make queries SHORT and PRECISE (2-5 words)
+- Make each query UNIQUE and cover different aspects
+- Use proper grammar
+- NO explanations, just the queries
+- Return ONLY the queries, one per line
+
+Examples:
+For "how does quantum computing work?":
+quantum computing basics
+quantum computer mechanics
+quantum vs classical computing
+
+Now generate {num_queries} queries for: "{user_query}"
+
+Queries:"""
+
+        try:
+            # Try to get LLM-generated queries
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,  # Lower for more focused queries
+                "max_tokens": 150
+            }
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    result = data['choices'][0]['message']['content'].strip()
+                    
+                    # Parse queries
+                    queries = [
+                        q.strip() 
+                        for q in result.split('\n') 
+                        if q.strip() and not q.strip().startswith(('#', '-', '*', '•'))
+                    ]
+                    
+                    # Clean up queries (remove numbering)
+                    cleaned_queries = []
+                    for q in queries:
+                        # Remove leading numbers and dots
+                        q = re.sub(r'^\d+[\.\)]\s*', '', q)
+                        q = q.strip('"\'')
+                        if q and len(q) > 3:
+                            cleaned_queries.append(q)
+                    
+                    if len(cleaned_queries) >= num_queries:
+                        print(f"✅ LLM generated {len(cleaned_queries)} queries successfully")
+                        for i, q in enumerate(cleaned_queries[:num_queries], 1):
+                            print(f"   {i}. {q}")
+                        return cleaned_queries[:num_queries]
+        
+        except Exception as e:
+            print(f"⚠️ LLM query generation failed: {str(e)[:100]}")
+        
+        # FALLBACK: Smart query variations
+        print("🔄 Using smart fallback query generation...")
+        
+        # Parse the user query to create better variations
+        query_lower = user_query.lower()
+        
+        variations = [user_query]  # Start with original
+        
+        # Extract key terms (nouns, important words)
+        words = user_query.split()
+        key_words = [w for w in words if len(w) > 3 and w.lower() not in 
+                     ['what', 'who', 'when', 'where', 'why', 'how', 'does', 'is', 'are', 'the']]
+        
+        if key_words:
+            key_phrase = ' '.join(key_words)
+            
+            # Add smart variations
+            if 'what' in query_lower or 'who' in query_lower:
+                variations.append(f"{key_phrase} definition")
+                variations.append(f"{key_phrase} explained")
+            
+            if 'how' in query_lower:
+                variations.append(f"{key_phrase} tutorial")
+                variations.append(f"{key_phrase} guide")
+            
+            if 'why' in query_lower:
+                variations.append(f"{key_phrase} reasons")
+                variations.append(f"{key_phrase} explanation")
+            
+            # Add comparison and example queries
+            variations.append(f"{key_phrase} examples")
+            variations.append(f"best {key_phrase}")
+            variations.append(f"{key_phrase} overview")
+        
+        # Ensure uniqueness
+        unique_variations = []
+        seen = set()
+        for v in variations:
+            v_clean = v.lower().strip()
+            if v_clean not in seen:
+                seen.add(v_clean)
+                unique_variations.append(v)
+        
+        result = unique_variations[:num_queries]
+        
+        print(f"✅ Generated {len(result)} fallback queries:")
+        for i, q in enumerate(result, 1):
+            print(f"   {i}. {q}")
+        
+        return result
     
     async def generate_response(
         self,
         prompt: str,
         context: Optional[str] = None,
         search_results: Optional[List[Dict]] = None,
-        temperature: float = 0.1,  # Lower temperature for consistency
+        temperature: float = 0.1,
         max_tokens: int = 2000,
         retry_count: int = 0
     ) -> str:
@@ -199,8 +307,8 @@ class OpenRouterClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "top_p": 0.9,
-            "frequency_penalty": 0.5,  # Reduce repetition
-            "presence_penalty": 0.5    # Encourage variety
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.5
         }
         
         try:
@@ -256,7 +364,7 @@ class OpenRouterClient:
             print(f"❌ Unexpected error: {str(e)}")
             
             if retry_count < len(self.fallback_models):
-                await asyncio.sleep(1)  # Brief delay before retry
+                await asyncio.sleep(1)
                 return await self.generate_response(
                     prompt, context, search_results,
                     temperature=0.1, max_tokens=max_tokens,
