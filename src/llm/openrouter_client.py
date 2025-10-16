@@ -3,6 +3,72 @@ import httpx
 import json
 from typing import List, Dict, Optional
 import asyncio
+import re
+
+
+
+def _linkify_sources_markdown(text: str, search_results: List[Dict]) -> str:
+    """
+    Replace ["...\" – Source N] with ["...\" – [🔗 Source N]](URL)
+    using URLs from search_results (1-indexed).
+    """
+    url_map = {i: r.get("url") or r.get("link") or "" for i, r in enumerate(search_results[:50], 1)}
+    pattern = re.compile(r'\[\s*"([^"]+)"\s*[\u2013\-]\s*Source\s+(\d+)\s*\]')
+
+    def repl(m):
+        quote = m.group(1).strip()
+        n = int(m.group(2))
+        url = url_map.get(n, "")
+        if not url:
+            return m.group(0)
+        return f'["{quote}" – [🔗 Source {n}]]({url})'
+
+    return pattern.sub(repl, text)
+
+
+def _linkify_sources_html(text: str, search_results: List[Dict]) -> str:
+    """
+    Detect both ["quote" – Source N] and (Source Nhttps://...) patterns
+    and turn them into clickable HTML links (<a class="src-btn">Source N</a>).
+    """
+
+    import re
+
+    # ✅ Мапа: Source N → URL
+    url_map = {i: r.get("url") or r.get("link") or "" for i, r in enumerate(search_results[:50], 1)}
+
+    # ✅ Патерни:
+    patterns = [
+        # 1. ["..." – Source 3]
+        re.compile(r'\[\s*"([^"]+)"\s*[\u2013\-]\s*Source\s+(\d+)\s*\]'),
+        # 2. Source 3(https://example.com)
+        re.compile(r'Source\s+(\d+)\s*\((https?://[^\s)]+)\)')
+    ]
+
+    # ✅ Замінюємо ["..." – Source N]
+    def replace_bracket_style(m):
+        quote = m.group(1).strip()
+        n = int(m.group(2))
+        url = url_map.get(n, "")
+        if not url:
+            return m.group(0)
+        return f'["{quote}" – <a class="src-btn" href="{url}" target="_blank" rel="noopener">Source {n}</a>]'
+
+    # ✅ Замінюємо Source N(https://...)
+    def replace_inline_url(m):
+        n = int(m.group(1))
+        url = url_map.get(n, m.group(2))
+        return f'<a class="src-btn" href="{url}" target="_blank" rel="noopener">Source {n}</a>'
+
+    # 1. ["..." – Source N]
+    text = patterns[0].sub(replace_bracket_style, text)
+    # 2. Source N(https://...)
+    text = patterns[1].sub(replace_inline_url, text)
+
+    return text
+
+
+
 
 class OpenRouterClient:
     def __init__(self, api_key: str, model_name: str = "x-ai/grok-beta"):
@@ -93,8 +159,10 @@ class OpenRouterClient:
                     "user": prompt,
                     "assistant": result
                 })
-                
-                return result
+
+            if search_results:
+                result = _linkify_sources_html(result, search_results)
+            return result
                 
         except httpx.HTTPStatusError as e:
             print(f"❌ API error: {e.response.status_code} - {e.response.text}")
@@ -165,7 +233,7 @@ class OpenRouterClient:
             "2. Synthesizes information from multiple sources\n"
             "3. Includes specific examples and data\n"
             "4. Explores different perspectives\n"
-            "5. Cites sources with [Source N] notation\n"
+            "5. Cites sources using this exact pattern: [\"confirming quote\" – Source N(raw URLs in body)]\n"
             "\nProvide a thorough, well-structured response:"
         )
         
