@@ -1,69 +1,9 @@
-# src/llm/openrouter_client.py - IMPROVED QUERY GENERATION
+# src/llm/openrouter_client.py - FIXED VERSION
 import httpx
 import json
 import re
 from typing import List, Dict, Optional
 import asyncio
-
-
-def _linkify_sources_markdown(text: str, search_results: List[Dict]) -> str:
-    """
-    Replace ["...\" – Source N] with ["...\" – [🔗 Source N]](URL)
-    using URLs from search_results (1-indexed).
-    """
-    url_map = {i: r.get("url") or r.get("link") or "" for i, r in enumerate(search_results[:50], 1)}
-    pattern = re.compile(r'\[\s*"([^"]+)"\s*[\u2013\-]\s*Source\s+(\d+)\s*\]')
-
-    def repl(m):
-        quote = m.group(1).strip()
-        n = int(m.group(2))
-        url = url_map.get(n, "")
-        if not url:
-            return m.group(0)
-        return f'["{quote}" – [🔗 Source {n}]]({url})'
-
-    return pattern.sub(repl, text)
-
-
-def _linkify_sources_html(text: str, search_results: List[Dict]) -> str:
-    """
-    Detect both ["quote" – Source N] and (Source Nhttps://...) patterns
-    and turn them into clickable HTML links (<a class="src-btn">Source N</a>).
-    """
-    import re
-
-    # ✅ Мапа: Source N → URL
-    url_map = {i: r.get("url") or r.get("link") or "" for i, r in enumerate(search_results[:50], 1)}
-
-    # ✅ Патерни:
-    patterns = [
-        # 1. ["..." – Source 3]
-        re.compile(r'\[\s*"([^"]+)"\s*[\u2013\-]\s*Source\s+(\d+)\s*\]'),
-        # 2. Source 3(https://example.com)
-        re.compile(r'Source\s+(\d+)\s*\((https?://[^\s)]+)\)')
-    ]
-
-    # ✅ Замінюємо ["..." – Source N]
-    def replace_bracket_style(m):
-        quote = m.group(1).strip()
-        n = int(m.group(2))
-        url = url_map.get(n, "")
-        if not url:
-            return m.group(0)
-        return f'["{quote}" – <a class="src-btn" href="{url}" target="_blank" rel="noopener">Source {n}</a>]'
-
-    # ✅ Замінюємо Source N(https://...)
-    def replace_inline_url(m):
-        n = int(m.group(1))
-        url = url_map.get(n, m.group(2))
-        return f'<a class="src-btn" href="{url}" target="_blank" rel="noopener">Source {n}</a>'
-
-    # 1. ["..." – Source N]
-    text = patterns[0].sub(replace_bracket_style, text)
-    # 2. Source N(https://...)
-    text = patterns[1].sub(replace_inline_url, text)
-
-    return text
 
 
 class OpenRouterClient:
@@ -100,12 +40,12 @@ class OpenRouterClient:
         
     def _validate_response(self, text: str) -> bool:
         """
-        ENHANCED validation to catch bad responses
+        Enhanced validation to catch bad responses
         """
         if not text or len(text.strip()) < 20:
             return False
         
-        # Check for repetitive patterns (the "you know" bug)
+        # Check for repetitive patterns
         words = text.lower().split()
         if len(words) > 10:
             # Check if same phrase repeats more than 5 times
@@ -137,11 +77,23 @@ class OpenRouterClient:
                 print(f"⚠️ Detected gibberish pattern")
                 return False
         
+        # Check for LLM artifact tags (these should be removed)
+        artifact_patterns = [
+            '<｜begin▁of▁sentence｜>',
+            '<｜end▁of▁sentence｜>',
+            '<|begin_of_sentence|>',
+            '<|end_of_sentence|>'
+        ]
+        
+        for artifact in artifact_patterns:
+            if artifact in text:
+                print(f"⚠️ Detected artifact tag: {artifact}")
+                return False
+        
         # Check for nonsensical endings
         nonsense_indicators = [
             "bye bye", "sweet dreams", "god bless", 
-            "have a nice day", "you're welcome",
-            "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"
+            "have a nice day", "you're welcome"
         ]
         
         text_lower = text.lower()
@@ -174,8 +126,28 @@ class OpenRouterClient:
         # Add the user's question
         prompt_parts.append(f"\nAnswer this question: {user_query}")
         prompt_parts.append("\nProvide a clear, direct, and informative answer based on the search results above.")
+        prompt_parts.append("\nCite sources as 'Source N' when referencing information.")
         
         return "\n".join(prompt_parts)
+    
+    def _clean_response(self, text: str) -> str:
+        """
+        Clean the LLM response by removing artifacts and unwanted patterns
+        """
+        # Remove LLM artifact tags
+        text = re.sub(r'<｜begin▁of▁sentence｜>', '', text)
+        text = re.sub(r'<｜end▁of▁sentence｜>', '', text)
+        text = re.sub(r'<\|begin_of_sentence\|>', '', text)
+        text = re.sub(r'<\|end_of_sentence\|>', '', text)
+        
+        # Remove any other common artifacts
+        text = re.sub(r'<\|.*?\|>', '', text)
+        
+        # Clean up extra whitespace
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        return text
     
     def _generate_fallback_response(self, prompt: str, search_results: Optional[List[Dict]] = None) -> str:
         """Generate a fallback response when all models fail"""
@@ -197,7 +169,7 @@ class OpenRouterClient:
     
     async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
         """
-        IMPROVED: Generate better search queries using the LLM
+        Generate better search queries using the LLM
         Falls back to smart variations if LLM fails
         """
         print(f"\n🧠 Generating {num_queries} search queries for: '{user_query}'")
@@ -248,6 +220,9 @@ Queries:"""
                 if response.status_code == 200:
                     data = response.json()
                     result = data['choices'][0]['message']['content'].strip()
+                    
+                    # Clean the result
+                    result = self._clean_response(result)
                     
                     # Parse queries
                     queries = [
@@ -335,7 +310,7 @@ Queries:"""
         retry_count: int = 0
     ) -> str:
         """
-        Generate response with better error handling and fallbacks
+        Generate response with better error handling and cleaning
         """
         # Use simpler, clearer prompt
         full_prompt = self._build_simple_prompt(prompt, search_results)
@@ -358,7 +333,7 @@ Queries:"""
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a helpful search assistant. Answer questions based on the provided search results. Be direct and informative."
+                    "content": "You are a helpful search assistant. Answer questions based on the provided search results. Be direct and informative. Cite sources as 'Source N' when referencing information. Do not include any system tags or artifacts in your response."
                 },
                 {
                     "role": "user",
@@ -384,6 +359,9 @@ Queries:"""
                 data = response.json()
                 result = data['choices'][0]['message']['content'].strip()
                 
+                # CLEAN the response first
+                result = self._clean_response(result)
+                
                 # VALIDATE the response
                 if not self._validate_response(result):
                     print(f"❌ Invalid response detected from {current_model}")
@@ -405,9 +383,7 @@ Queries:"""
                     "user": prompt,
                     "assistant": result
                 })
-
-                if search_results:
-                    result = _linkify_sources_html(result, search_results)
+                
                 return result
                 
         except httpx.HTTPStatusError as e:
@@ -461,7 +437,8 @@ Queries:"""
                 )
                 response.raise_for_status()
                 data = response.json()
-                return data['choices'][0]['message']['content']
+                result = data['choices'][0]['message']['content']
+                return self._clean_response(result)
                 
         except Exception as e:
             print(f"❌ Summarization failed: {str(e)}")

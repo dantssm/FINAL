@@ -1,4 +1,4 @@
-// src/api/script.js
+// src/api/script.js - FIXED VERSION
 let searchWebSocket = null;
 let currentSearchId = null;
 
@@ -184,34 +184,20 @@ function displaySearchResults(data) {
     return;
   }
 
-  console.log("📄 Displaying search results, answer length:", data.answer?.length);
+  console.log("📄 Displaying search results");
+  console.log("Answer type:", typeof data.answer);
+  console.log("Answer length:", data.answer?.length);
+  console.log("First 200 chars:", data.answer?.substring(0, 200));
 
-  let html = '<div class="result-card">';
-  
-  // ✅ CRITICAL FIX: Render HTML directly, don't escape it!
+  // CRITICAL FIX: The answer comes as HTML string, use it directly with innerHTML
   if (data.answer && data.answer.length > 0) {
-    // The answer is already formatted HTML from the backend
-    html += data.answer;
+    // The answer is already HTML formatted from the backend
+    // Just set it directly - innerHTML will render the HTML
+    console.log("✅ Setting HTML answer directly with innerHTML");
+    resultsDiv.innerHTML = data.answer;
   } else {
-    html += '<div class="answer"><p>No answer returned.</p></div>';
+    resultsDiv.innerHTML = '<div class="result-card"><div class="answer"><p>No answer returned.</p></div></div>';
   }
-
-  // Sources block
-  if (Array.isArray(data.sources) && data.sources.length > 0) {
-    html += '<div class="sources">';
-    html += '<div style="font-weight:700;margin-bottom:8px">📚 Sources (' + (data.total_sources || data.sources.length) + '):</div>';
-    data.sources.forEach(source => {
-      html += '<div class="source">';
-      html += '<div class="source-title">' + escapeHtml(source.title || '') + '</div>';
-      html += '<a href="' + escapeAttr(source.url || '#') + '" target="_blank" rel="noreferrer" class="source-url">' + escapeHtml(source.url || '') + '</a>';
-      if (source.snippet) html += '<div class="source-snippet">' + escapeHtml(source.snippet) + '</div>';
-      html += '</div>';
-    });
-    html += '</div>';
-  }
-
-  html += '</div>';
-  resultsDiv.innerHTML = html;
 
   // Trigger MathJax typesetting if available
   if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
@@ -221,6 +207,24 @@ function displaySearchResults(data) {
       console.warn('MathJax typeset error', e); 
     }
   }
+}
+
+function buildSourcesHTML(sources, totalCount) {
+  let html = '<div class="sources">';
+  html += '<div style="font-weight:700;margin-bottom:8px">📚 Sources (' + (totalCount || sources.length) + '):</div>';
+  
+  sources.forEach(source => {
+    html += '<div class="source">';
+    html += '<div class="source-title">' + escapeHtml(source.title || 'No title') + '</div>';
+    html += '<a href="' + escapeAttr(source.url || '#') + '" target="_blank" rel="noreferrer" class="source-url">' + escapeHtml(source.url || '') + '</a>';
+    if (source.snippet) {
+      html += '<div class="source-snippet">' + escapeHtml(source.snippet) + '</div>';
+    }
+    html += '</div>';
+  });
+  
+  html += '</div>';
+  return html;
 }
 
 function showError(message) {

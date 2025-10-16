@@ -1,11 +1,6 @@
-# src/pipeline/deep_search.py - OPTIMIZED VERSION
+# src/pipeline/deep_search.py - FIXED VERSION
 """
-OPTIMIZED Deep Search Pipeline with:
-- Batch embeddings (5-10x faster)
-- Connection pooling (2x faster scraping)
-- Persistent cache (instant cached results)
-- Better query generation
-- RAG retrieval
+Deep Search Pipeline with proper text/HTML formatting
 """
 
 import asyncio
@@ -24,24 +19,22 @@ from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
 
 
-def format_answer(raw_answer: str, sources: list) -> str:
+def format_answer_html(raw_answer: str, sources: list) -> str:
     """
-    Формує HTML-відповідь з абзацами та кнопками-джерелами після кожного абзацу.
-    URL беруться з 'Source N(https://...)' або з search_results.
-    Після генерації кнопок усі посилання (https...) у тексті видаляються.
+    Format answer as HTML for web display.
+    Converts markdown-style formatting to HTML with source buttons.
     """
     if not raw_answer:
         return ""
 
-    # 🔹 Мапа Source N → URL (fallback із search_results)
+    # Map Source N → URL
     url_map = {i: r.get("url") or r.get("link") or "#" for i, r in enumerate(sources, 1)}
 
-    # 🔹 Знайти всі Source N(https://...) і видалити URL з тексту
+    # Extract inline URLs from "Source N(https://...)"
     def extract_inline_urls(match):
         n = int(match.group(1))
         url = match.group(2).strip()
         url_map[n] = url
-        # Повертаємо тільки "Source N" без URL
         return f"Source {n}"
 
     cleaned_text = re.sub(
@@ -50,20 +43,29 @@ def format_answer(raw_answer: str, sources: list) -> str:
         raw_answer
     )
 
-    # 🔹 Розбиваємо на абзаци
+    # Remove any remaining bare URLs
+    cleaned_text = re.sub(r'https?://[^\s)]+', '', cleaned_text)
+
+    # Split into paragraphs
     paragraphs = [p.strip() for p in cleaned_text.split("\n\n") if p.strip()]
 
     html = "<div class='chat-block'>"
 
     for p in paragraphs:
+        # Clean markdown formatting
         clean_p = re.sub(r"[*_#>`]", "", p).strip()
+        
+        # Remove any artifact tags
+        clean_p = re.sub(r'<｜begin▁of▁sentence｜>', '', clean_p)
+        clean_p = re.sub(r'<｜end▁of▁sentence｜>', '', clean_p)
+        
         html += f"<p>{clean_p}</p>"
 
-        # Знайти всі згадки Source N
+        # Find all Source N mentions
         found = re.findall(r"Source\s+(\d+)", clean_p)
         found_unique = sorted(set(int(n) for n in found if n.isdigit()))
 
-        # Додаємо кнопки
+        # Add source buttons after paragraph
         if found_unique:
             html += "<div class='chat-sources'>"
             for n in found_unique:
@@ -83,6 +85,37 @@ def format_answer(raw_answer: str, sources: list) -> str:
 
     html += "</div>"
     return html
+
+
+def format_answer_text(raw_answer: str) -> str:
+    """
+    Format answer as plain text (no HTML).
+    Removes HTML tags and cleans up formatting.
+    """
+    if not raw_answer:
+        return ""
+
+    # Remove HTML tags if any
+    text = re.sub(r'<[^>]+>', '', raw_answer)
+    
+    # Remove markdown formatting
+    text = re.sub(r'[*_#>`]', '', text)
+    
+    # Remove artifact tags
+    text = re.sub(r'<｜begin▁of▁sentence｜>', '', text)
+    text = re.sub(r'<｜end▁of▁sentence｜>', '', text)
+    
+    # Clean up Source N(URL) references - keep just "Source N"
+    text = re.sub(r'Source\s+(\d+)\s*\(https?://[^\s)]+\)', r'Source \1', text)
+    
+    # Remove any remaining bare URLs
+    text = re.sub(r'https?://[^\s]+', '', text)
+    
+    # Clean up whitespace
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    return text
 
 
 class SearchLogger:
@@ -171,7 +204,7 @@ class SessionManager:
 
 class DeepSearchPipeline:
     """
-    OPTIMIZED Deep Search Pipeline
+    Deep Search Pipeline with proper text/HTML formatting
     """
     
     def __init__(self):
@@ -259,10 +292,14 @@ class DeepSearchPipeline:
         depth: int = 2,
         max_results_per_search: int = 7,
         use_rag: bool = True,
-        websocket: Optional[WebSocket] = None
+        websocket: Optional[WebSocket] = None,
+        return_format: str = "html"  # "html" or "text"
     ) -> Dict:
         """
-        OPTIMIZED deep search with batch embeddings and RAG
+        Deep search with proper formatting
+        
+        Args:
+            return_format: "html" for web display, "text" for plain text API responses
         """
         logger = SearchLogger()
         
@@ -283,6 +320,7 @@ class DeepSearchPipeline:
         logger.log(f"Search Depth: {depth} levels")
         logger.log(f"Max Results per Search: {max_results_per_search}")
         logger.log(f"Using RAG: {use_rag}")
+        logger.log(f"Return format: {return_format}")
         logger.log(f"Using Model: {config.OPENROUTER_MODEL}")
         logger.log(f"Using Embeddings: {config.EMBEDDING_PROVIDER}")
         logger.log("="*60)
@@ -387,7 +425,7 @@ class DeepSearchPipeline:
         
         logger.log(f"✅ Successfully scraped {len(scraped_content)}/{len(top_urls)} pages", "SUCCESS")
         
-        # OPTIMIZATION 5: Batch add all documents (ONE embedding call!)
+        # OPTIMIZATION 5: Batch add all documents
         logger.log(f"\n💾 PHASE 5: Batch Knowledge Base Update", "PROGRESS")
         
         documents_to_add = []
@@ -424,7 +462,6 @@ class DeepSearchPipeline:
             logger.log(f"   Query: '{query}'")
             logger.log(f"   Requesting top {config.MAX_CHUNKS_FOR_LLM} most relevant chunks...")
             
-            # Search vector store for most relevant chunks
             rag_results = await vector_store.search(query, n_results=config.MAX_CHUNKS_FOR_LLM)
             
             logger.log(f"✅ Retrieved {len(rag_results)} relevant chunks from vector store", "SUCCESS")
@@ -432,7 +469,6 @@ class DeepSearchPipeline:
             if rag_results:
                 logger.log(f"   Similarity scores: {rag_results[0]['similarity_score']:.3f} (top) to {rag_results[-1]['similarity_score']:.3f} (lowest)")
             
-            # Use RAG results if available
             sources_for_llm = rag_results if rag_results else all_search_results[:config.MAX_CHUNKS_FOR_LLM]
         else:
             logger.log(f"⚠️  No vector store available, using all scraped sources", "WARNING")
@@ -460,10 +496,15 @@ class DeepSearchPipeline:
         
         logger.log(f"✅ Generated raw answer: {len(raw_answer)} characters")
 
-        answer = format_answer(raw_answer, all_search_results)
-        logger.log(f"✅ Formatted answer with HTML: {len(answer)} total chars (includes markup)")
+        # Format based on return type
+        if return_format == "html":
+            answer = format_answer_html(raw_answer, all_search_results)
+            logger.log(f"✅ Formatted answer as HTML: {len(answer)} total chars (includes markup)")
+        else:
+            answer = format_answer_text(raw_answer)
+            logger.log(f"✅ Formatted answer as plain text: {len(answer)} chars")
         
-        # Step 5: Store in session history
+        # Store in session history
         if session_id not in self.session_histories:
             self.session_histories[session_id] = []
         
@@ -490,7 +531,7 @@ class DeepSearchPipeline:
                     "url": r.get('url', r.get('link', '#')),
                     "snippet": r.get('content', r.get('snippet', ''))[:300]
                 }
-                for r in sources_for_llm[:10]  # Show top 10 sources used
+                for r in sources_for_llm[:10]
             ],
             "total_sources": len(all_search_results),
             "chunks_analyzed": len(sources_for_llm) if use_rag else 0,
@@ -513,7 +554,8 @@ class DeepSearchPipeline:
         logger.log(f"   • Total sources found: {result['total_sources']}")
         logger.log(f"   • Chunks analyzed by LLM: {result['chunks_analyzed']}")
         logger.log(f"   • Raw answer length: {len(raw_answer)} chars (LLM output)")
-        logger.log(f"   • Formatted answer: {len(answer)} chars (with HTML markup)")
+        logger.log(f"   • Formatted answer: {len(answer)} chars")
+        logger.log(f"   • Format type: {return_format}")
         logger.log(f"   • Cache entries: {cache_stats['active_entries']}/{cache_stats['total_entries']}")
         logger.log(f"   • Vector DB docs: {vector_stats['total_documents']}")
         logger.log(f"   • Embedding provider: {vector_stats['embedding_provider']}")
@@ -534,13 +576,15 @@ class DeepSearchPipeline:
         session_id: str,
         use_search: bool = True,
         use_rag: bool = True,
-        websocket: Optional[WebSocket] = None
+        websocket: Optional[WebSocket] = None,
+        return_format: str = "text"
     ) -> str:
         """Chat with session context"""
         print(f"\n💬 Starting chat in session {session_id[:12]}...")
         print(f"   Message: '{message[:60]}...'")
         print(f"   Use search: {use_search}")
         print(f"   Use RAG: {use_rag}")
+        print(f"   Return format: {return_format}")
         
         context = self._build_session_context(session_id)
         
@@ -552,7 +596,8 @@ class DeepSearchPipeline:
                 depth=1,
                 max_results_per_search=5,
                 use_rag=use_rag,
-                websocket=websocket
+                websocket=websocket,
+                return_format=return_format
             )
             print(f"✅ Chat search complete: {len(result['answer'])} chars")
             return result['answer']
@@ -580,6 +625,10 @@ class DeepSearchPipeline:
                     prompt=message,
                     context=context
                 )
+            
+            # Format response
+            if return_format == "text":
+                response = format_answer_text(response)
             return response
         else:
             print("💭 Using context only (no search, no RAG)")
@@ -587,6 +636,8 @@ class DeepSearchPipeline:
                 prompt=message,
                 context=context
             )
+            if return_format == "text":
+                response = format_answer_text(response)
             return response
     
     def _build_session_context(self, session_id: str) -> str:
@@ -599,9 +650,11 @@ class DeepSearchPipeline:
             return ""
         
         context_parts = []
-        for item in history[-5:]:  # Last 5 interactions
+        for item in history[-5:]:
             context_parts.append(f"Q: {item['query']}")
-            context_parts.append(f"A: {item['answer'][:800]}...")
+            # Strip HTML for context
+            clean_answer = format_answer_text(item['answer'])
+            context_parts.append(f"A: {clean_answer[:800]}...")
             context_parts.append("")
         
         return "\n".join(context_parts)

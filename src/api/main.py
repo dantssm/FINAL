@@ -1,4 +1,4 @@
-# src/api/main.py
+# src/api/main.py - FIXED VERSION
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -86,12 +86,14 @@ async def websocket_search(websocket: WebSocket):
                 print(f"🔍 WebSocket search: {query}")
                 
                 try:
+                    # Use HTML format for WebSocket (web interface)
                     result = await pipeline.search(
                         query=query,
                         session_id=session_id,
                         depth=depth,
                         max_results_per_search=max_results,
-                        websocket=websocket
+                        websocket=websocket,
+                        return_format="html"  # HTML for web display
                     )
                     
                     # Result already sent via WebSocket
@@ -120,10 +122,12 @@ async def root():
 async def search(request: SearchRequest):
     """Perform deep search (REST endpoint)"""
     try:
+        # Use text format for REST API (no HTML tags)
         result = await pipeline.search(
             query=request.query,
             depth=request.depth,
-            max_results_per_search=request.max_results
+            max_results_per_search=request.max_results,
+            return_format="text"  # Plain text for API
         )
         return SearchResponse(
             query=result['query'],
@@ -144,10 +148,12 @@ async def chat(request: ChatRequest):
         if request.session_id not in chat_sessions:
             chat_sessions[request.session_id] = []
         
+        # Use text format for chat API
         response = await pipeline.chat(
             message=request.message,
             session_id=request.session_id,
-            use_search=request.use_search
+            use_search=request.use_search,
+            return_format="text"  # Plain text for API
         )
         
         chat_sessions[request.session_id].append({
