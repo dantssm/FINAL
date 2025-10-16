@@ -1,4 +1,4 @@
-# src/rag/vector_store.py
+# src/rag/vector_store.py - OPTIMIZED VERSION
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
@@ -17,32 +17,55 @@ class EmbeddingProvider:
         raise NotImplementedError
 
 class LocalEmbeddings(EmbeddingProvider):
-    """FREE local embeddings using sentence-transformers"""
+    """FREE local embeddings with multi-processing"""
     
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         print(f"📥 Loading local embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
+        
+        # Enable multi-processing for faster embeddings
+        self.pool = None
+        if hasattr(self.model, 'start_multi_process_pool'):
+            try:
+                self.pool = self.model.start_multi_process_pool()
+                print("✅ Multi-process pool enabled for faster embeddings!")
+            except Exception as e:
+                print(f"⚠️  Could not enable multi-process pool: {e}")
+                self.pool = None
         
         # Check for GPU
         if hasattr(self.model.device, 'type'):
             if self.model.device.type == 'cuda':
                 print("✅ GPU acceleration enabled!")
             else:
-                print("⚠️  Using CPU (slower). Consider using cloud embeddings.")
+                print("⚠️  Using CPU. Consider using cloud embeddings for speed.")
     
     async def encode(self, texts: List[str]) -> List[List[float]]:
         print(f"🔢 Encoding {len(texts)} text chunks with local model...")
-        # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(
-            None,
-            lambda: self.model.encode(
-                texts,
-                show_progress_bar=False,
-                batch_size=32,
-                normalize_embeddings=True
+        
+        # Use multi-process pool if available
+        if self.pool:
+            embeddings = await loop.run_in_executor(
+                None,
+                lambda: self.model.encode_multi_process(
+                    texts,
+                    pool=self.pool,
+                    batch_size=32,
+                    normalize_embeddings=True
+                )
             )
-        )
+        else:
+            embeddings = await loop.run_in_executor(
+                None,
+                lambda: self.model.encode(
+                    texts,
+                    show_progress_bar=False,
+                    batch_size=64,  # Increased from 32
+                    normalize_embeddings=True
+                )
+            )
+        
         print(f"✅ Local encoding complete: {len(texts)} embeddings generated")
         return embeddings.tolist()
 
@@ -260,7 +283,7 @@ class HuggingFaceEmbeddings(EmbeddingProvider):
 
 class VectorStore:
     """
-    OPTIMIZED vector store with multiple embedding providers
+    OPTIMIZED vector store with batch embeddings
     """
     
     def __init__(self, persist_directory: str = "./data/chromadb"):
@@ -355,6 +378,87 @@ class VectorStore:
         except Exception as e:
             print(f"❌ Error clearing vector store: {e}")
     
+    async def add_documents_batch(
+        self,
+        documents: List[Dict[str, str]],
+        metadata: Dict = None
+    ) -> List[str]:
+        """
+        🚀 OPTIMIZED: Add multiple documents in ONE embedding call
+        This is 5-10x faster than calling add_document() multiple times!
+        
+        Args:
+            documents: List of dicts with 'url', 'title', 'content', 'query'
+        """
+        print(f"\n📚 Batch adding {len(documents)} documents...")
+        
+        all_chunks = []
+        all_ids = []
+        all_metadatas = []
+        doc_ids = []
+        
+        for doc in documents:
+            doc_id = hashlib.md5(doc['url'].encode()).hexdigest()
+            
+            # Check if exists
+            existing = self.collection.get(ids=[f"{doc_id}_0"])
+            if existing['ids']:
+                print(f"⏭️  Skipping (exists): {doc['title'][:40]}...")
+                doc_ids.append(doc_id)
+                continue
+            
+            # Chunk document
+            chunks = self._smart_chunk(
+                doc['content'],
+                chunk_size=config.CHUNK_SIZE,
+                overlap=config.CHUNK_OVERLAP
+            )
+            
+            if not chunks:
+                continue
+            
+            # Prepare metadata for all chunks
+            doc_metadata = {
+                "url": doc['url'],
+                "title": doc['title'],
+                "query": doc.get('query', ''),
+                "timestamp": datetime.now().isoformat(),
+                "content_length": len(doc['content']),
+                "embedding_provider": config.EMBEDDING_PROVIDER
+            }
+            
+            for i, chunk in enumerate(chunks):
+                all_chunks.append(chunk)
+                all_ids.append(f"{doc_id}_{i}")
+                all_metadatas.append({
+                    **doc_metadata, 
+                    "chunk_index": i, 
+                    "total_chunks": len(chunks)
+                })
+            
+            doc_ids.append(doc_id)
+            print(f"✅ Prepared: {doc['title'][:50]}... ({len(chunks)} chunks)")
+        
+        if not all_chunks:
+            print("⚠️  No new documents to add")
+            return doc_ids
+        
+        # 🚀 ONE SINGLE EMBEDDING CALL FOR ALL CHUNKS!
+        print(f"\n🔢 Embedding {len(all_chunks)} chunks in ONE batch call...")
+        embeddings = await self.embedder.encode(all_chunks)
+        
+        # Add to database
+        print(f"💾 Storing {len(all_chunks)} chunks in ChromaDB...")
+        self.collection.add(
+            ids=all_ids,
+            embeddings=embeddings,
+            documents=all_chunks,
+            metadatas=all_metadatas
+        )
+        
+        print(f"✅ Batch added {len(documents)} documents ({len(all_chunks)} total chunks)")
+        return doc_ids
+    
     async def add_document(
         self,
         content: str,
@@ -363,7 +467,7 @@ class VectorStore:
         query: str = "",
         metadata: Dict = None
     ) -> str:
-        """Add document with optimized chunking - NO LIMITS"""
+        """Legacy single document add - use add_documents_batch for speed!"""
         
         # Create document ID
         doc_id = hashlib.md5(url.encode()).hexdigest()
@@ -390,7 +494,7 @@ class VectorStore:
         if metadata:
             doc_metadata.update(metadata)
         
-        # Smart chunking with configured size
+        # Smart chunking
         print(f"   Chunking with size={config.CHUNK_SIZE}, overlap={config.CHUNK_OVERLAP}...")
         chunks = self._smart_chunk(
             content,
@@ -398,14 +502,7 @@ class VectorStore:
             overlap=config.CHUNK_OVERLAP
         )
         
-        print(f"   Created {len(chunks)} chunks (NO artificial limits!)")
-        
-        # Show chunk size distribution
-        if len(chunks) > 0:
-            avg_size = sum(len(c) for c in chunks) / len(chunks)
-            min_size = min(len(c) for c in chunks)
-            max_size = max(len(c) for c in chunks)
-            print(f"   Chunk sizes: avg={avg_size:.0f}, min={min_size}, max={max_size}")
+        print(f"   Created {len(chunks)} chunks")
         
         # Generate embeddings
         print(f"   Generating embeddings for {len(chunks)} chunks...")

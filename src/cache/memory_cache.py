@@ -1,24 +1,70 @@
-# src/cache/memory_cache.py
+# src/cache/memory_cache.py - OPTIMIZED with Persistent Cache
 import hashlib
 import time
+import pickle
+import os
 from typing import Optional, Any, Dict
 from datetime import datetime, timedelta
 import asyncio
 
 class MemoryCache:
     """
-    FREE in-memory cache (no Redis needed)
-    Stores search results and scraped content in RAM
-    Perfect for single-server deployments
+    FREE in-memory cache with DISK PERSISTENCE
+    Cache survives restarts for instant results!
     """
     
-    def __init__(self, default_ttl_hours: int = 24, max_size: int = 1000):
+    def __init__(self, default_ttl_hours: int = 24, max_size: int = 1000, 
+                 cache_file: str = "./data/cache.pkl"):
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.default_ttl = timedelta(hours=default_ttl_hours)
         self.max_size = max_size
+        self.cache_file = cache_file
         
-        # Start background cleanup task
+        # Load cache from disk if exists
+        self._load_from_disk()
+        
+        # Start background tasks
         asyncio.create_task(self._cleanup_expired())
+        asyncio.create_task(self._periodic_save())
+    
+    def _load_from_disk(self):
+        """Load cache from disk on startup"""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'rb') as f:
+                    self.cache = pickle.load(f)
+                
+                # Clean expired entries
+                expired_keys = [
+                    key for key, entry in self.cache.items()
+                    if datetime.now() > entry['expires_at']
+                ]
+                for key in expired_keys:
+                    del self.cache[key]
+                
+                active_count = len(self.cache)
+                print(f"✅ Loaded {active_count} cache entries from disk ({len(expired_keys)} expired removed)")
+            except Exception as e:
+                print(f"⚠️  Failed to load cache: {e}")
+                self.cache = {}
+        else:
+            print(f"📦 Starting with empty cache")
+    
+    def _save_to_disk(self):
+        """Save cache to disk"""
+        try:
+            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.cache, f)
+            print(f"💾 Cache saved to disk ({len(self.cache)} entries)")
+        except Exception as e:
+            print(f"⚠️  Failed to save cache: {e}")
+    
+    async def _periodic_save(self):
+        """Save cache every 5 minutes"""
+        while True:
+            await asyncio.sleep(300)  # 5 minutes
+            self._save_to_disk()
     
     def _make_key(self, prefix: str, data: str) -> str:
         """Create cache key from data"""
@@ -60,6 +106,8 @@ class MemoryCache:
             
             if expired_keys:
                 print(f"🧹 Cleaned up {len(expired_keys)} expired cache entries")
+                # Save after cleanup
+                self._save_to_disk()
     
     async def get_search_results(self, query: str) -> Optional[list]:
         """Get cached search results"""
@@ -121,7 +169,10 @@ class MemoryCache:
     async def clear_all(self):
         """Clear all cache"""
         self.cache.clear()
-        print("🗑️ Memory cache cleared")
+        # Also clear disk cache
+        if os.path.exists(self.cache_file):
+            os.remove(self.cache_file)
+        print("🗑️ Memory cache cleared (disk and memory)")
     
     def get_stats(self) -> Dict:
         """Get cache statistics"""
