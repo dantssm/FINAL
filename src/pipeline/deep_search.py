@@ -11,6 +11,73 @@ import os
 import shutil
 from datetime import datetime, timedelta
 from fastapi import WebSocket
+import re
+from urllib.parse import urlparse
+
+def format_answer(raw_answer: str, sources: list) -> str:
+    """
+    Формує HTML-відповідь з абзацами та кнопками-джерелами після кожного абзацу.
+    URL беруться з 'Source N(https://...)' або з search_results.
+    Після генерації кнопок усі посилання (https...) у тексті видаляються.
+    """
+    if not raw_answer:
+        return ""
+
+    # 🔹 Мапа Source N → URL (fallback із search_results)
+    url_map = {i: r.get("url") or r.get("link") or "#" for i, r in enumerate(sources, 1)}
+
+    # 🔹 Знайти всі Source N(https://...) і видалити URL з тексту
+    def extract_inline_urls(match):
+        n = int(match.group(1))
+        url = match.group(2).strip()
+        url_map[n] = url
+        # Повертаємо тільки "Source N" без URL
+        return f"Source {n}"
+
+    cleaned_text = re.sub(
+        r"Source\s+(\d+)\s*\(\s*(https?://[^\s)]+)\s*\)",
+        extract_inline_urls,
+        raw_answer
+    )
+
+    # 🔹 Розбиваємо на абзаци
+    paragraphs = [p.strip() for p in cleaned_text.split("\n\n") if p.strip()]
+
+    html = "<div class='chat-block'>"
+
+    for p in paragraphs:
+        clean_p = re.sub(r"[*_#>`]", "", p).strip()
+        html += f"<p>{clean_p}</p>"
+
+        # Знайти всі згадки Source N
+        found = re.findall(r"Source\s+(\d+)", clean_p)
+        found_unique = sorted(set(int(n) for n in found if n.isdigit()))
+
+        # Додаємо кнопки
+        if found_unique:
+            html += "<div class='chat-sources'>"
+            for n in found_unique:
+                url = url_map.get(n, "#")
+                if not url.startswith("http"):
+                    continue
+
+                parsed = urlparse(url)
+                domain = parsed.netloc.replace("www.", "")
+                label = f"🌐 {domain}"
+
+                html += (
+                    f"<a href='{url}' class='chat-source-btn' title='{domain}' "
+                    f"target='_blank' rel='noopener noreferrer'>{label}</a>"
+                )
+            html += "</div>"
+
+    html += "</div>"
+    return html
+
+
+
+
+
 
 from src.config import config
 from src.search.google_search import GoogleSearcher
@@ -18,6 +85,7 @@ from src.search.web_scraper import WebScraper
 from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
 from datetime import datetime
+
 
 class SearchLogger:
     """Tracks and stores step-by-step progress of a deep search request"""
@@ -138,7 +206,7 @@ class DeepSearchPipeline:
         try:
             await websocket.send_json(message)
         except Exception as e:
-            # Silent fail - don't break search process 
+            # Silent fail - don't break search process
             pass
     
     def generate_session_id(self) -> str:
@@ -357,10 +425,17 @@ class DeepSearchPipeline:
             "stage": "llm_generation"
         })
         
-        answer = await self.llm_client.generate_response(
+        # Normalize URLs before passing to LLM
+        for s in all_search_results:
+            if not s.get("url") and s.get("link"):
+                s["url"] = s["link"]
+
+        raw_answer = await self.llm_client.generate_response(
             prompt=query,
             search_results=all_search_results
         )
+
+        answer = format_answer(raw_answer, all_search_results)
         
         # Step 5: Store in session history
         if session_id not in self.session_histories:
