@@ -176,34 +176,6 @@ function updateProgress(message, current, total) {
   updateStatus(message + progress, 'progress');
 }
 
-function insertClickableSources(text, sources = []) {
-  // шукаємо патерн типу Source 1, Source 2...
-  return text.replace(/Source\s+(\d+)/g, (match, num) => {
-    const index = parseInt(num) - 1;
-    if (sources[index] && sources[index].url) {
-      const title = sources[index].title || `Source ${num}`;
-      const url = sources[index].url;
-      return `<a class="src-btn" href="${url}" target="_blank" rel="noopener">${title}</a>`;
-    }
-    return match;
-  });
-}
-
-function linkifySources(text) {
-  // 1️⃣ Замінюємо патерн типу Source 3(https://example.com)
-  text = text.replace(/Source\s+(\d+)\((https?:\/\/[^\s)]+)\)/g, (match, num, url) => {
-    return `<a class="src-btn" href="${url}" target="_blank" rel="noopener">Source ${num}</a>`;
-  });
-
-  // 2️⃣ Замінюємо ["..." – Source 3] на клікабельне, якщо треба
-  text = text.replace(/\["([^"]+)"\s*–\s*Source\s+(\d+)\]/g, (match, quote, num) => {
-    return `["${quote}" – <span class="src-btn-inline">Source ${num}</span>]`;
-  });
-
-  return text;
-}
-
-
 function displaySearchResults(data) {
   const resultsDiv = document.getElementById('results');
   
@@ -214,32 +186,15 @@ function displaySearchResults(data) {
 
   console.log("📄 Displaying search results, answer length:", data.answer?.length);
 
-  const raw = data.answer || '';
-  const normalized = stripMarkdownKeepMath(raw);
-  const paragraphs = normalized.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
-  
-  const seen = new Set();
-  const uniqueParagraphs = [];
-  for (const p of paragraphs) {
-    if (!seen.has(p)) {
-      seen.add(p);
-      uniqueParagraphs.push(p);
-    }
-  }
-
   let html = '<div class="result-card">';
-  html += '<div class="answer">';
-
-  if (uniqueParagraphs.length === 0) {
-    html += '<p>No answer returned.</p>';
+  
+  // ✅ CRITICAL FIX: Render HTML directly, don't escape it!
+  if (data.answer && data.answer.length > 0) {
+    // The answer is already formatted HTML from the backend
+    html += data.answer;
   } else {
-    uniqueParagraphs.forEach(p => {
-      // не екрануємо HTML — дозволяємо теги <a>
-      html += '<p>' + insertClickableSources(p) + '</p>';
-    });
+    html += '<div class="answer"><p>No answer returned.</p></div>';
   }
-
-  html += '</div>';
 
   // Sources block
   if (Array.isArray(data.sources) && data.sources.length > 0) {
@@ -258,7 +213,7 @@ function displaySearchResults(data) {
   html += '</div>';
   resultsDiv.innerHTML = html;
 
-  // Trigger MathJax typesetting
+  // Trigger MathJax typesetting if available
   if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
     try { 
       window.MathJax.typesetPromise(); 
@@ -284,60 +239,6 @@ function resetSearchButton(button) {
 }
 
 // Helper functions
-function stripMarkdownKeepMath(text) {
-  if (!text) return '';
-  const mathRegions = [];
-  const mathRe = /(\$\$[\s\S]+?\$\$|\$[^$\n]+\$)/g;
-  let idx = 0;
-  const placeholderText = text.replace(mathRe, m => {
-    const key = `@@MATH${idx}@@`;
-    mathRegions.push({ key, math: m });
-    idx++;
-    return key;
-  });
-
-  const cleanedLines = placeholderText.split('\n').map(line => {
-    line = line.replace(/^\s{0,3}#{1,6}\s*/, '');
-    line = line.replace(/\*\*(.*?)\*\*/g, '$1');
-    line = line.replace(/__(.*?)__/g, '$1');
-    line = line.replace(/\*(.*?)\*/g, '$1');
-    line = line.replace(/_(.*?)_/g, '$1');
-    line = line.replace(/`([^`]+)`/g, '$1');
-    return line;
-  }).join('\n');
-
-  let restored = cleanedLines;
-  for (const r of mathRegions) {
-    restored = restored.replace(r.key, r.math);
-  }
-  return restored;
-}
-
-function escapeHtmlExceptMath(text) {
-  if (!text) return '';
-  const mathRegions = [];
-  const mathRe = /(\$\$[\s\S]+?\$\$|\$[^$\n]+\$)/g;
-  let idx = 0;
-  const withPlaceholders = text.replace(mathRe, m => {
-    const key = `@@M${idx}@@`;
-    mathRegions.push({ key, math: m });
-    idx++;
-    return key;
-  });
-
-  let escaped = withPlaceholders
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-  for (const r of mathRegions) {
-    escaped = escaped.replace(r.key, r.math);
-  }
-  return escaped;
-}
-
 function escapeHtml(str) {
   if (str === undefined || str === null) return '';
   return String(str)

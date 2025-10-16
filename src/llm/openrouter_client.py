@@ -4,8 +4,6 @@ import json
 import re
 from typing import List, Dict, Optional
 import asyncio
-import re
-
 
 
 def _linkify_sources_markdown(text: str, search_results: List[Dict]) -> str:
@@ -32,7 +30,6 @@ def _linkify_sources_html(text: str, search_results: List[Dict]) -> str:
     Detect both ["quote" – Source N] and (Source Nhttps://...) patterns
     and turn them into clickable HTML links (<a class="src-btn">Source N</a>).
     """
-
     import re
 
     # ✅ Мапа: Source N → URL
@@ -67,8 +64,6 @@ def _linkify_sources_html(text: str, search_results: List[Dict]) -> str:
     text = patterns[1].sub(replace_inline_url, text)
 
     return text
-
-
 
 
 class OpenRouterClient:
@@ -239,7 +234,7 @@ Queries:"""
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3,  # Lower for more focused queries
+                "temperature": 0.3,
                 "max_tokens": 150
             }
             
@@ -411,9 +406,9 @@ Queries:"""
                     "assistant": result
                 })
 
-            if search_results:
-                result = _linkify_sources_html(result, search_results)
-            return result
+                if search_results:
+                    result = _linkify_sources_html(result, search_results)
+                return result
                 
         except httpx.HTTPStatusError as e:
             print(f"❌ HTTP Error {e.response.status_code} from {current_model}")
@@ -430,58 +425,16 @@ Queries:"""
             
         except Exception as e:
             print(f"❌ Unexpected error: {str(e)}")
-            return "An unexpected error occurred. Please try again."
-    
-    def _build_prompt(
-        self,
-        user_query: str,
-        context: Optional[str] = None,
-        search_results: Optional[List[Dict]] = None
-    ) -> str:
-        """
-        Build a comprehensive prompt with all available information
-        """
-        prompt_parts = []
-        
-        # Add search results if available
-        if search_results:
-            prompt_parts.append("## Web Search Results:\n")
             
-            # Smart truncation to stay within limits
-            max_content_per_source = 2000
+            if retry_count < len(self.fallback_models):
+                await asyncio.sleep(1)
+                return await self.generate_response(
+                    prompt, context, search_results,
+                    temperature=0.1, max_tokens=max_tokens,
+                    retry_count=retry_count + 1
+                )
             
-            for i, result in enumerate(search_results[:10], 1):  # Max 10 sources
-                prompt_parts.append(f"\n### Source {i}: {result.get('title', 'No title')}")
-                
-                content = result.get('content', result.get('snippet', 'No content'))
-                if len(content) > max_content_per_source:
-                    content = content[:max_content_per_source] + "... [truncated]"
-                
-                prompt_parts.append(f"Content: {content}\n")
-        
-        # Add conversation context if available
-        if context:
-            prompt_parts.append("\n## Previous Conversation:\n")
-            if len(context) > 1000:
-                context = context[-1000:]
-            prompt_parts.append(context)
-        
-        # Add the user's question
-        prompt_parts.append(f"\n## User Question:\n{user_query}")
-        
-        # Instructions for comprehensive response
-        prompt_parts.append(
-            "\n## Instructions:\n"
-            "Based on the search results above, provide a comprehensive and detailed answer that:\n"
-            "1. Directly addresses the question with depth\n"
-            "2. Synthesizes information from multiple sources\n"
-            "3. Includes specific examples and data\n"
-            "4. Explores different perspectives\n"
-            "5. Cites sources using this exact pattern: [\"confirming quote\" – Source N(raw URLs in body)]\n"
-            "\nProvide a thorough, well-structured response:"
-        )
-        
-        return "\n".join(prompt_parts)
+            return self._generate_fallback_response(prompt, search_results)
     
     async def summarize_text(self, text: str, max_length: int = 200) -> str:
         """
@@ -513,71 +466,3 @@ Queries:"""
         except Exception as e:
             print(f"❌ Summarization failed: {str(e)}")
             return "Could not summarize the text."
-    
-    async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
-        """
-        Generate related search queries for deeper research
-        """
-        prompt = f"""Based on the question: "{user_query}"
-        
-Generate {num_queries} different Google search queries to find comprehensive information.
-Make them specific and diverse to cover different aspects.
-
-Return ONLY the search queries, one per line, no numbering:"""
-        
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.base_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model_name,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.8,
-                        "max_tokens": 200
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                result = data['choices'][0]['message']['content']
-                
-                # Parse the response into separate queries
-                queries = [q.strip() for q in result.strip().split('\n') if q.strip()]
-                return queries[:num_queries]
-                
-        except Exception as e:
-            print(f"❌ Query generation failed: {str(e)}")
-            return [
-                user_query,
-                f"{user_query} explained",
-                f"{user_query} examples"
-            ][:num_queries]
-    
-    def clear_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
-        print("✅ Conversation history cleared")
-    
-    def get_model_info(self) -> Dict:
-        """Get information about the current model"""
-        return {
-            "provider": "OpenRouter",
-            "model": self.model_name,
-            "base_url": self.base_url
-        }
-
-            
-        if retry_count < len(self.fallback_models):
-            await asyncio.sleep(1)
-            return await self.generate_response(
-                prompt, context, search_results,
-                temperature=0.1, max_tokens=max_tokens,
-                retry_count=retry_count + 1
-            )
-        
-        return self._generate_fallback_response(prompt, search_results)

@@ -1,4 +1,4 @@
-# src/pipeline/deep_search.py - OPTIMIZED VERSION (Part 1)
+# src/pipeline/deep_search.py - OPTIMIZED VERSION
 """
 OPTIMIZED Deep Search Pipeline with:
 - Batch embeddings (5-10x faster)
@@ -17,6 +17,12 @@ from datetime import datetime, timedelta
 from fastapi import WebSocket
 import re
 from urllib.parse import urlparse
+
+from src.config import config
+from src.cache.memory_cache import MemoryCache, CachedGoogleSearcher, CachedJinaScraper
+from src.llm.openrouter_client import OpenRouterClient
+from src.rag.vector_store import VectorStore
+
 
 def format_answer(raw_answer: str, sources: list) -> str:
     """
@@ -70,24 +76,14 @@ def format_answer(raw_answer: str, sources: list) -> str:
                 label = f"🌐 {domain}"
 
                 html += (
-                    f"<a href='{url}' class='chat-source-btn' title='{domain}' "
-                    f"target='_blank' rel='noopener noreferrer'>{label}</a>"
+                    f'<a href="{url}" class="chat-source-btn" title="{domain}" '
+                    f'target="_blank" rel="noopener noreferrer">{label}</a>'
                 )
             html += "</div>"
 
     html += "</div>"
     return html
 
-
-
-
-
-
-from src.config import config
-from src.search.google_search import GoogleSearcher
-from src.llm.openrouter_client import OpenRouterClient
-from src.rag.vector_store import VectorStore
-from datetime import datetime
 
 class SearchLogger:
     """Tracks search progress with detailed logging"""
@@ -285,9 +281,6 @@ class DeepSearchPipeline:
         logger.log(f"Query: '{query}'")
         logger.log(f"Session ID: {session_id[:12]}...")
         logger.log(f"Search Depth: {depth} levels")
-# src/pipeline/deep_search.py - OPTIMIZED VERSION (Part 2)
-# Continuation of the search method and other methods
-
         logger.log(f"Max Results per Search: {max_results_per_search}")
         logger.log(f"Using RAG: {use_rag}")
         logger.log(f"Using Model: {config.OPENROUTER_MODEL}")
@@ -455,8 +448,6 @@ class DeepSearchPipeline:
         logger.log(f"Sending {len(sources_for_llm)} most relevant sources to LLM...")
         logger.log(f"Total content size: ~{sum(len(s.get('content', '')) for s in sources_for_llm):,} chars")
         
-        # Generate comprehensive answer using most relevant content
-        answer = await self.llm_client.generate_response(
         # Normalize URLs before passing to LLM
         for s in all_search_results:
             if not s.get("url") and s.get("link"):
@@ -466,8 +457,11 @@ class DeepSearchPipeline:
             prompt=query,
             search_results=sources_for_llm
         )
+        
+        logger.log(f"✅ Generated raw answer: {len(raw_answer)} characters")
 
         answer = format_answer(raw_answer, all_search_results)
+        logger.log(f"✅ Formatted answer with HTML: {len(answer)} total chars (includes markup)")
         
         # Step 5: Store in session history
         if session_id not in self.session_histories:
@@ -518,7 +512,8 @@ class DeepSearchPipeline:
         logger.log(f"📊 Results Summary:")
         logger.log(f"   • Total sources found: {result['total_sources']}")
         logger.log(f"   • Chunks analyzed by LLM: {result['chunks_analyzed']}")
-        logger.log(f"   • Answer length: {len(answer)} characters")
+        logger.log(f"   • Raw answer length: {len(raw_answer)} chars (LLM output)")
+        logger.log(f"   • Formatted answer: {len(answer)} chars (with HTML markup)")
         logger.log(f"   • Cache entries: {cache_stats['active_entries']}/{cache_stats['total_entries']}")
         logger.log(f"   • Vector DB docs: {vector_stats['total_documents']}")
         logger.log(f"   • Embedding provider: {vector_stats['embedding_provider']}")
