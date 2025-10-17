@@ -1,24 +1,26 @@
-# src/api/main.py - FastAPI server
+"""
+FastAPI server for deep search
+Simplified to match the student version pipeline
+"""
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import List, Dict
 from datetime import datetime
 import os
-import uuid
 
 from src.pipeline.deep_search import DeepSearchPipeline
-from src.api.websocket_manager import manager
 
 app = FastAPI(
-    title="AI Deep Search Engine - OPTIMIZED FREE",
-    description="Lightning-fast deep search with FREE services only",
-    version="3.0.1"
+    title="AI Deep Search Engine",
+    description="Deep search using Google, web scraping, and AI",
+    version="1.0"
 )
 
-# Enable CORS
+# Enable CORS so frontend can talk to backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,228 +29,215 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files
+# Serve static files (CSS, JS, images, etc.)
 BASE_DIR = os.path.dirname(__file__)
-app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
+if os.path.exists(os.path.join(BASE_DIR, "static")):
+    app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
-# Initialize pipeline
+# Initialize the search pipeline once when server starts
+print("🚀 Starting Deep Search API...")
 pipeline = DeepSearchPipeline()
-chat_sessions = {}
+print("✅ API ready!\n")
 
-# Models
+
+# Request/Response models (defines what the API expects and returns)
 class SearchRequest(BaseModel):
     query: str
-    depth: int = 3
-    max_results: int = 7
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str
-    use_search: bool = True
+    depth: int = 2  # How many search queries to generate
+    max_results: int = 7  # Results per query
 
 class SearchResponse(BaseModel):
     query: str
     answer: str
     sources: List[Dict]
     total_sources: int
-    search_depth: int
-    timestamp: str
-    cache_stats: Optional[Dict] = None
-
-class ChatResponse(BaseModel):
-    message: str
-    response: str
-    session_id: str
+    chunks_analyzed: int
+    time_seconds: float
     timestamp: str
 
-# WebSocket Routes
+
+# Serve the main HTML page
+@app.get("/", response_class=HTMLResponse)
+async def serve_homepage():
+    """
+    Serve the main web interface HTML page
+    This is what shows up when you visit http://localhost:8000/
+    """
+    html_path = os.path.join(BASE_DIR, "index.html")
+    
+    # Check if the HTML file exists
+    if not os.path.exists(html_path):
+        return HTMLResponse(
+            content="""
+            <html>
+                <head><title>Deep Search Engine</title></head>
+                <body>
+                    <h1>Deep Search Engine API</h1>
+                    <p>The API is running, but the web interface (index.html) was not found.</p>
+                    <p>Available endpoints:</p>
+                    <ul>
+                        <li>WebSocket: ws://localhost:8000/ws/search</li>
+                        <li>REST API: POST /api/search</li>
+                        <li>Health Check: GET /api/health</li>
+                        <li>API Docs: <a href="/docs">/docs</a></li>
+                    </ul>
+                </body>
+            </html>
+            """,
+            status_code=200
+        )
+    
+    # Serve the HTML file
+    with open(html_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
+# WebSocket endpoint - for real-time updates in the browser
 @app.websocket("/ws/search")
 async def websocket_search(websocket: WebSocket):
-    await manager.connect(websocket)
+    """
+    WebSocket connection for search with real-time progress updates
+    
+    This is what lets the frontend show "Searching Google..." messages
+    while the search is running instead of just showing a loading spinner
+    """
+    await websocket.accept()
+    print("🔌 WebSocket connected")
+    
     try:
+        # Keep listening for messages from the frontend
         while True:
             data = await websocket.receive_json()
-            print(f"📥 Received: {data}")
+            print(f"📥 Received WebSocket message: {data.get('type')}")
             
             if data.get("type") == "search":
                 query = data.get("query", "")
-                depth = data.get("depth", 3)
+                depth = data.get("depth", 2)
                 max_results = data.get("max_results", 7)
-                session_id = data.get("session_id", "")
                 
                 if not query:
-                    await manager.send_message(websocket, {
+                    await websocket.send_json({
                         "type": "error",
                         "message": "Query is required"
                     })
                     continue
                 
-                print(f"🔍 WebSocket search: {query}")
-                print(f"   Depth: {depth} (will generate {depth + 1} queries)")
-                print(f"   Max results: {max_results} per query")
+                print(f"\n🔍 WebSocket search started")
+                print(f"   Query: '{query}'")
+                print(f"   Depth: {depth}")
+                print(f"   Max results: {max_results}")
                 
                 try:
-                    # Use HTML format for WebSocket (web interface)
+                    # Run the search - the websocket parameter lets it send updates
                     result = await pipeline.search(
                         query=query,
-                        session_id=session_id,
                         depth=depth,
-                        max_results_per_search=max_results,
-                        websocket=websocket,
-                        return_format="html"  # HTML for web display
+                        max_results=max_results,
+                        websocket=websocket
                     )
                     
-                    # Result already sent via WebSocket
+                    # Send the final result
+                    await websocket.send_json({
+                        "type": "result",
+                        "data": {
+                            "query": result["query"],
+                            "answer": result["answer"],
+                            "sources": result["sources"],
+                            "total_sources": result["total_sources"],
+                            "chunks_analyzed": result["chunks_analyzed"],
+                            "time_seconds": result["time_seconds"]
+                        }
+                    })
+                    
+                    print(f"✅ WebSocket search complete\n")
                     
                 except Exception as e:
-                    await manager.send_message(websocket, {
+                    print(f"❌ Search error: {str(e)}")
+                    await websocket.send_json({
                         "type": "error",
                         "message": f"Search failed: {str(e)}"
                     })
-            
-            # Handle session end
-            elif data.get("type") == "end_session":
-                session_id = data.get("session_id", "")
-                if session_id:
-                    print(f"👋 Ending session: {session_id[:12]}...")
-                    pipeline.end_session(session_id)
-                    await manager.send_message(websocket, {
-                        "type": "session_ended",
-                        "message": "Session ended and cache cleared"
-                    })
-                    
+    
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        print("🔌 WebSocket disconnected")
     except Exception as e:
-        print(f"WebSocket error: {e}")
-        manager.disconnect(websocket)
+        print(f"❌ WebSocket error: {str(e)}")
 
-# REST Routes
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Serve HTML page"""
-    html_path = os.path.join(BASE_DIR, "index.html")
-    with open(html_path, "r", encoding="utf-8") as f:
-        return f.read()
 
-@app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
-    """Perform deep search (REST endpoint)"""
+# REST API endpoint - for programmatic access without WebSocket
+@app.post("/api/search", response_model=SearchResponse)
+async def search_api(request: SearchRequest):
+    """
+    REST API endpoint for search
+    
+    This is for when you want to use the search engine from code/scripts
+    instead of through the web interface. No real-time updates, just
+    makes the request and waits for the final result.
+    """
     try:
-        print(f"\n🔍 REST API search: {request.query}")
-        print(f"   Depth: {request.depth} (will generate {request.depth + 1} queries)")
-        print(f"   Max results: {request.max_results} per query")
+        print(f"\n🔍 REST API search started")
+        print(f"   Query: '{request.query}'")
+        print(f"   Depth: {request.depth}")
+        print(f"   Max results: {request.max_results}")
         
-        # Use text format for REST API (no HTML tags)
+        # Run search without websocket (no progress updates)
         result = await pipeline.search(
             query=request.query,
             depth=request.depth,
-            max_results_per_search=request.max_results,
-            return_format="text"  # Plain text for API
+            max_results=request.max_results,
+            websocket=None  # No websocket = no progress updates
         )
+        
+        print(f"✅ REST API search complete\n")
+        
         return SearchResponse(
             query=result['query'],
             answer=result['answer'],
             sources=result['sources'],
             total_sources=result['total_sources'],
-            search_depth=result['search_depth'],
-            timestamp=datetime.now().isoformat(),
-            cache_stats=result.get('cache_stats')
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """Chat with context"""
-    try:
-        if request.session_id not in chat_sessions:
-            chat_sessions[request.session_id] = []
-        
-        # Use text format for chat API
-        response = await pipeline.chat(
-            message=request.message,
-            session_id=request.session_id,
-            use_search=request.use_search,
-            return_format="text"  # Plain text for API
-        )
-        
-        chat_sessions[request.session_id].append({
-            "message": request.message,
-            "response": response,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return ChatResponse(
-            message=request.message,
-            response=response,
-            session_id=request.session_id,
+            chunks_analyzed=result['chunks_analyzed'],
+            time_seconds=result['time_seconds'],
             timestamp=datetime.now().isoformat()
         )
+        
     except Exception as e:
+        print(f"❌ Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/session/{session_id}")
-async def end_session(session_id: str):
-    """End a session and clear its cache"""
+
+@app.get("/api/health")
+async def health_check():
+    """Check if the API is running"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Deep Search API is running"
+    }
+
+
+@app.post("/api/clear")
+async def clear_knowledge():
+    """Clear the vector store (start fresh)"""
     try:
-        print(f"\n👋 API request to end session: {session_id[:12]}...")
-        pipeline.end_session(session_id)
-        
-        if session_id in chat_sessions:
-            del chat_sessions[session_id]
-        
+        pipeline.clear_knowledge()
         return {
             "status": "success",
-            "message": f"Session {session_id[:12]} ended and cache cleared",
+            "message": "Knowledge base cleared",
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
-async def health_check():
-    """Health check with cache stats"""
-    stats = pipeline.get_knowledge_stats()
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "cache_stats": stats.get('cache_stats'),
-        "active_sessions": stats.get('active_sessions')
-    }
 
-@app.get("/cache/stats")
-async def cache_stats():
-    """Get cache statistics"""
-    stats = pipeline.get_knowledge_stats()
-    return {
-        "cache": stats.get('cache_stats'),
-        "active_sessions": stats.get('active_sessions'),
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.post("/cache/clear")
-async def clear_cache():
-    """Clear cache (admin endpoint)"""
-    await pipeline.cache.clear_all()
-    return {
-        "status": "success",
-        "message": "All cache cleared",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/knowledge-stats")
-async def knowledge_stats():
-    """Get knowledge base statistics"""
-    stats = pipeline.get_knowledge_stats()
-    return {
-        "cache_stats": stats.get('cache_stats'),
-        "active_sessions": stats.get('active_sessions'),
-        "timestamp": datetime.now().isoformat()
-    }
-
+# Run the server
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting OPTIMIZED AI Deep Search API (FREE)...")
-    print("📍 Open http://localhost:8000 in your browser")
+    print("\n" + "="*60)
+    print("🚀 Starting Deep Search API Server")
+    print("="*60)
+    print("📍 API will be available at: http://localhost:8000")
+    print("📍 WebSocket endpoint: ws://localhost:8000/ws/search")
+    print("📍 REST API endpoint: http://localhost:8000/api/search")
+    print("="*60 + "\n")
+    
     uvicorn.run(app, host="0.0.0.0", port=8000)

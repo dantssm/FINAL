@@ -1,4 +1,3 @@
-# src/llm/openrouter_client.py - FIXED VERSION
 import httpx
 import json
 import re
@@ -8,14 +7,12 @@ import asyncio
 
 class OpenRouterClient:
     def __init__(self, api_key: str, model_name: str = "google/gemini-2.0-flash-exp:free"):
-        """
-        Initialize OpenRouter client
-        """
+        """Set up the OpenRouter client with API key and model"""
         self.api_key = api_key
         self.model_name = model_name
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Better fallback chain
+        # Backup models in case the main one fails
         self.fallback_models = [
             "google/gemini-2.0-flash-exp:free",
             "meta-llama/llama-3.2-3b-instruct:free",
@@ -25,177 +22,81 @@ class OpenRouterClient:
         self.conversation_history = []
         print(f"✅ OpenRouter initialized with: {model_name}")
     
-    def get_model_info(self):
-        """Get current model info"""
-        return {
-            "provider": "OpenRouter",
-            "model": self.model_name,
-            "fallback_models": self.fallback_models
-        }
-    
     def clear_history(self):
-        """Clear conversation history"""
+        """Wipe the conversation history"""
         self.conversation_history = []
         print("✅ Conversation history cleared")
-        
-    def _validate_response(self, text: str) -> bool:
-        """
-        Enhanced validation to catch bad responses
-        """
-        if not text or len(text.strip()) < 20:
-            return False
-        
-        # Check for repetitive patterns
-        words = text.lower().split()
-        if len(words) > 10:
-            # Check if same phrase repeats more than 5 times
-            for i in range(len(words) - 5):
-                phrase = words[i]
-                count = sum(1 for j in range(i, min(i+20, len(words))) if words[j] == phrase)
-                if count > 5:
-                    print(f"⚠️ Detected repetitive pattern: '{phrase}' repeated {count} times")
-                    return False
-        
-        # Check for other repetitive patterns (2-3 word phrases)
-        for window_size in [2, 3]:
-            for i in range(len(words) - window_size * 3):
-                phrase = ' '.join(words[i:i+window_size])
-                text_segment = ' '.join(words[i:i+window_size*6])
-                if text_segment.count(phrase) >= 3:
-                    print(f"⚠️ Detected repetitive phrase: '{phrase}'")
-                    return False
-        
-        # Check for gibberish indicators
-        gibberish_patterns = [
-            r'(\b\w+\b)(?:\s+\1){4,}',  # Same word repeated 5+ times
-            r'(.{2,10})\1{4,}',  # Any pattern repeated 5+ times
-            r'[a-zA-Z]{30,}',  # Very long continuous text without spaces
-        ]
-        
-        for pattern in gibberish_patterns:
-            if re.search(pattern, text.lower()):
-                print(f"⚠️ Detected gibberish pattern")
-                return False
-        
-        # Check for LLM artifact tags (these should be removed)
-        artifact_patterns = [
-            '<｜begin▁of▁sentence｜>',
-            '<｜end▁of▁sentence｜>',
-            '<|begin_of_sentence|>',
-            '<|end_of_sentence|>'
-        ]
-        
-        for artifact in artifact_patterns:
-            if artifact in text:
-                print(f"⚠️ Detected artifact tag: {artifact}")
-                return False
-        
-        # Check for nonsensical endings
-        nonsense_indicators = [
-            "bye bye", "sweet dreams", "god bless", 
-            "have a nice day", "you're welcome"
-        ]
-        
-        text_lower = text.lower()
-        # Only flag if it's JUST these phrases or very short
-        if len(text) < 100:
-            for indicator in nonsense_indicators:
-                if indicator in text_lower:
-                    print(f"⚠️ Detected nonsense indicator: {indicator}")
-                    return False
-        
-        return True
     
-    def _build_simple_prompt(self, user_query: str, search_results: Optional[List[Dict]] = None) -> str:
-        """Build a simple, clear prompt"""
-        prompt_parts = []
+    def _build_prompt(self, user_query: str, search_results: Optional[List[Dict]] = None) -> str:
+        """
+        Build a clear prompt that makes the LLM understand it needs to cite sources
+        The key is being explicit about what we want
+        """
+        parts = []
         
-        # Add search results if available
         if search_results:
-            prompt_parts.append("Based on the following search results:\n")
+            parts.append("You are answering a question using web search results. Here are the sources:\n")
+            
             for i, result in enumerate(search_results, 1):
-                prompt_parts.append(f"\n### Source {i}: {result.get('title', 'No title')}")
+                title = result.get('title', 'Untitled')
+                url = result.get('url', 'No URL')
+                content = result.get('content', result.get('snippet', ''))
                 
-                # Use content if available, otherwise use snippet
-                content = result.get('content', result.get('snippet', 'No content'))
-                # Limit content length to avoid huge prompts
-                if len(content) > 800:
-                    content = content[:800] + "..."
-                prompt_parts.append(f"Content: {content}\n")
+                # Format each source clearly with URL
+                parts.append(f"\n--- Source {i} ---")
+                parts.append(f"Title: {title}")
+                parts.append(f"URL: {url}")
+                parts.append(f"Content: {content}\n")
         
-        # Add the user's question
-        prompt_parts.append(f"\nAnswer this question: {user_query}")
-        prompt_parts.append("\nProvide a clear, direct, and informative answer based on the search results above.")
-        prompt_parts.append("\nCite sources as 'Source N' when referencing information.")
+        # Now the actual question and instructions
+        parts.append(f"\nUser Question: {user_query}\n")
+        parts.append("Instructions:")
+        parts.append("- Answer the question thoroughly using the sources above")
+        parts.append("- When you use information from a source, write it like: 'According to Source 1 (url), ...'")
+        parts.append("- Include the URL when citing so users can verify")
+        parts.append("- Provide a detailed, comprehensive answer since this is deep search")
+        parts.append("- Don't just copy text, explain and synthesize the information")
         
-        return "\n".join(prompt_parts)
-    
-    def _clean_response(self, text: str) -> str:
-        """
-        Clean the LLM response by removing artifacts and unwanted patterns
-        """
-        # Remove LLM artifact tags
-        text = re.sub(r'<｜begin▁of▁sentence｜>', '', text)
-        text = re.sub(r'<｜end▁of▁sentence｜>', '', text)
-        text = re.sub(r'<\|begin_of_sentence\|>', '', text)
-        text = re.sub(r'<\|end_of_sentence\|>', '', text)
-        
-        # Remove any other common artifacts
-        text = re.sub(r'<\|.*?\|>', '', text)
-        
-        # Clean up extra whitespace
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        
-        return text
-    
-    def _generate_fallback_response(self, prompt: str, search_results: Optional[List[Dict]] = None) -> str:
-        """Generate a fallback response when all models fail"""
-        if search_results and len(search_results) > 0:
-            # Try to extract key information from search results
-            response = f"Based on the search results for '{prompt}':\n\n"
-            
-            for i, result in enumerate(search_results[:3], 1):
-                title = result.get('title', '')
-                snippet = result.get('snippet', result.get('content', ''))[:200]
-                if title or snippet:
-                    response += f"{i}. {title}\n"
-                    if snippet:
-                        response += f"   {snippet}...\n\n"
-            
-            return response.strip()
-        else:
-            return f"I apologize, but I'm having trouble generating a response for '{prompt}'. Please try again or rephrase your question."
+        return "\n".join(parts)
     
     async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
         """
-        Generate better search queries using the LLM
-        Falls back to smart variations if LLM fails
-        """
-        print(f"\n🧠 Generating {num_queries} search queries for: '{user_query}'")
+        Generate smart Google search queries that approach the question from different angles
         
-        # Try to use LLM for better query generation
-        prompt = f"""Generate {num_queries} diverse Google search queries to find comprehensive information about: "{user_query}"
+        The idea: one question can be answered better with multiple searches
+        For example, "how does photosynthesis work?" could benefit from:
+        - "photosynthesis process steps" (the how)
+        - "chloroplast function photosynthesis" (the mechanism)
+        - "photosynthesis light dark reaction" (the details)
+        
+        This gives us broader coverage than just searching the question as-is
+        """
+        print(f"\n🧠 Creating {num_queries} search queries for: '{user_query}'")
+        
+        prompt = f"""You are a search query expert. Generate {num_queries} different Google search queries that will help answer this question comprehensively: "{user_query}"
 
-Requirements:
-- Make queries SHORT and PRECISE (2-5 words)
-- Make each query UNIQUE and cover different aspects
-- Use proper grammar
-- NO explanations, just the queries
-- Return ONLY the queries, one per line
+Think about:
+- What are the KEY concepts in this question?
+- What different ANGLES could we search from?
+- What SPECIFIC terms would get better results than the question itself?
 
-Examples:
-For "how does quantum computing work?":
-quantum computing basics
-quantum computer mechanics
-quantum vs classical computing
+IMPORTANT RULES:
+- Each query should be 2-6 words
+- Make them DIFFERENT from each other (cover different aspects)
+- Use specific terminology, not vague words
+- Think like you're actually Googling - what would find the best pages?
 
-Now generate {num_queries} queries for: "{user_query}"
+Just output the {num_queries} queries, one per line. No numbering, no explanations.
 
-Queries:"""
+Example for "Why is the sky blue?":
+rayleigh scattering atmosphere
+sky color physics explanation
+blue light wavelength scattering
+
+Now generate queries for: "{user_query}"
+"""
 
         try:
-            # Try to get LLM-generated queries
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
@@ -203,102 +104,33 @@ Queries:"""
             
             payload = {
                 "model": self.model_name,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 150
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,  # Higher temp for more creative queries
+                "max_tokens": 200
             }
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    self.base_url,
-                    headers=headers,
-                    json=payload
-                )
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(self.base_url, headers=headers, json=payload)
                 
                 if response.status_code == 200:
                     data = response.json()
                     result = data['choices'][0]['message']['content'].strip()
                     
-                    # Clean the result
-                    result = self._clean_response(result)
+                    # Just split by lines and clean up
+                    queries = [line.strip() for line in result.split('\n') if line.strip()]
                     
-                    # Parse queries
-                    queries = [
-                        q.strip() 
-                        for q in result.split('\n') 
-                        if q.strip() and not q.strip().startswith(('#', '-', '*', '•'))
-                    ]
-                    
-                    # Clean up queries (remove numbering)
-                    cleaned_queries = []
-                    for q in queries:
-                        # Remove leading numbers and dots
-                        q = re.sub(r'^\d+[\.\)]\s*', '', q)
-                        q = q.strip('"\'')
-                        if q and len(q) > 3:
-                            cleaned_queries.append(q)
-                    
-                    if len(cleaned_queries) >= num_queries:
-                        print(f"✅ LLM generated {len(cleaned_queries)} queries successfully")
-                        for i, q in enumerate(cleaned_queries[:num_queries], 1):
+                    if len(queries) >= num_queries:
+                        print(f"✅ AI generated {len(queries)} search queries:")
+                        for i, q in enumerate(queries[:num_queries], 1):
                             print(f"   {i}. {q}")
-                        return cleaned_queries[:num_queries]
+                        return queries[:num_queries]
+                    else:
+                        print(f"⚠️ AI only generated {len(queries)} queries, falling back to original")
+                        return [user_query]
         
         except Exception as e:
-            print(f"⚠️ LLM query generation failed: {str(e)[:100]}")
-        
-        # FALLBACK: Smart query variations
-        print("🔄 Using smart fallback query generation...")
-        
-        # Parse the user query to create better variations
-        query_lower = user_query.lower()
-        
-        variations = [user_query]  # Start with original
-        
-        # Extract key terms (nouns, important words)
-        words = user_query.split()
-        key_words = [w for w in words if len(w) > 3 and w.lower() not in 
-                     ['what', 'who', 'when', 'where', 'why', 'how', 'does', 'is', 'are', 'the']]
-        
-        if key_words:
-            key_phrase = ' '.join(key_words)
-            
-            # Add smart variations
-            if 'what' in query_lower or 'who' in query_lower:
-                variations.append(f"{key_phrase} definition")
-                variations.append(f"{key_phrase} explained")
-            
-            if 'how' in query_lower:
-                variations.append(f"{key_phrase} tutorial")
-                variations.append(f"{key_phrase} guide")
-            
-            if 'why' in query_lower:
-                variations.append(f"{key_phrase} reasons")
-                variations.append(f"{key_phrase} explanation")
-            
-            # Add comparison and example queries
-            variations.append(f"{key_phrase} examples")
-            variations.append(f"best {key_phrase}")
-            variations.append(f"{key_phrase} overview")
-        
-        # Ensure uniqueness
-        unique_variations = []
-        seen = set()
-        for v in variations:
-            v_clean = v.lower().strip()
-            if v_clean not in seen:
-                seen.add(v_clean)
-                unique_variations.append(v)
-        
-        result = unique_variations[:num_queries]
-        
-        print(f"✅ Generated {len(result)} fallback queries:")
-        for i, q in enumerate(result, 1):
-            print(f"   {i}. {q}")
-        
-        return result
+            print(f"⚠️ AI query generation failed: {str(e)[:150]}")
+            return [user_query]
     
     async def generate_response(
         self,
@@ -306,14 +138,13 @@ Queries:"""
         context: Optional[str] = None,
         search_results: Optional[List[Dict]] = None,
         temperature: float = 0.1,
-        max_tokens: int = 2000,
         retry_count: int = 0
     ) -> str:
         """
-        Generate response with better error handling and cleaning
+        Generate a response from the AI
+        Tries different models if one fails
         """
-        # Use simpler, clearer prompt
-        full_prompt = self._build_simple_prompt(prompt, search_results)
+        full_prompt = self._build_prompt(prompt, search_results)
         
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -322,18 +153,18 @@ Queries:"""
             "X-Title": "AI Deep Search"
         }
         
-        # Determine which model to use based on retry count
+        # Use fallback models if we've retried
         current_model = self.model_name
         if retry_count > 0 and retry_count <= len(self.fallback_models):
             current_model = self.fallback_models[retry_count - 1]
-            print(f"🔄 Retry {retry_count}: Using {current_model}")
+            print(f"🔄 Retry {retry_count}: Trying {current_model}")
         
         payload = {
             "model": current_model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a helpful search assistant. Answer questions based on the provided search results. Be direct and informative. Cite sources as 'Source N' when referencing information. Do not include any system tags or artifacts in your response."
+                    "content": "You are a research assistant. Answer questions using the provided sources. Always cite your sources with URLs."
                 },
                 {
                     "role": "user",
@@ -341,7 +172,7 @@ Queries:"""
                 }
             ],
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": 3000,  # Long responses for deep search
             "top_p": 0.9,
             "frequency_penalty": 0.5,
             "presence_penalty": 0.5
@@ -349,36 +180,26 @@ Queries:"""
         
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.base_url,
-                    headers=headers,
-                    json=payload
-                )
+                response = await client.post(self.base_url, headers=headers, json=payload)
                 response.raise_for_status()
                 
                 data = response.json()
                 result = data['choices'][0]['message']['content'].strip()
                 
-                # CLEAN the response first
-                result = self._clean_response(result)
-                
-                # VALIDATE the response
-                if not self._validate_response(result):
-                    print(f"❌ Invalid response detected from {current_model}")
-                    
-                    # Try with next model
+                # Basic sanity check
+                if len(result) < 50:
+                    print(f"⚠️ Response too short from {current_model}")
                     if retry_count < len(self.fallback_models):
                         return await self.generate_response(
                             prompt, context, search_results,
-                            temperature=0.1, max_tokens=max_tokens,
-                            retry_count=retry_count + 1
+                            temperature=0.1, retry_count=retry_count + 1
                         )
                     else:
-                        return self._generate_fallback_response(prompt, search_results)
+                        return "I couldn't generate a good answer. The AI models might be having issues. Try again?"
                 
-                print(f"✅ Valid response from {current_model} ({len(result)} chars)")
+                print(f"✅ Got response from {current_model} ({len(result)} chars)")
                 
-                # Store in history
+                # Save to history
                 self.conversation_history.append({
                     "user": prompt,
                     "assistant": result
@@ -387,59 +208,24 @@ Queries:"""
                 return result
                 
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error {e.response.status_code} from {current_model}")
+            print(f"❌ HTTP Error {e.response.status_code} with {current_model}")
             
-            # Try next model
             if retry_count < len(self.fallback_models):
                 return await self.generate_response(
                     prompt, context, search_results,
-                    temperature=0.1, max_tokens=max_tokens,
-                    retry_count=retry_count + 1
+                    temperature=0.1, retry_count=retry_count + 1
                 )
             
-            return self._generate_fallback_response(prompt, search_results)
+            return f"All AI models failed. Error: {e.response.status_code}"
             
         except Exception as e:
-            print(f"❌ Unexpected error: {str(e)}")
+            print(f"❌ Error: {str(e)}")
             
             if retry_count < len(self.fallback_models):
                 await asyncio.sleep(1)
                 return await self.generate_response(
                     prompt, context, search_results,
-                    temperature=0.1, max_tokens=max_tokens,
-                    retry_count=retry_count + 1
+                    temperature=0.1, retry_count=retry_count + 1
                 )
             
-            return self._generate_fallback_response(prompt, search_results)
-    
-    async def summarize_text(self, text: str, max_length: int = 200) -> str:
-        """
-        Summarize long text
-        """
-        prompt = f"Summarize the following text in no more than {max_length} words:\n\n{text[:5000]}\n\nSummary:"
-        
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    self.base_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model_name,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.5,
-                        "max_tokens": 500
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                result = data['choices'][0]['message']['content']
-                return self._clean_response(result)
-                
-        except Exception as e:
-            print(f"❌ Summarization failed: {str(e)}")
-            return "Could not summarize the text."
+            return f"Something went wrong: {str(e)}"
