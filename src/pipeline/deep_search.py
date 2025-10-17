@@ -1,39 +1,50 @@
+"""
+Deep Search Pipeline
+Simplified to focus on core functionality
+"""
+
 import asyncio
 from typing import List, Dict, Optional
 from datetime import datetime
 from fastapi import WebSocket
 
 from src.config import config
-from src.cache.memory_cache import MemoryCache, CachedGoogleSearcher, CachedJinaScraper
+from src.cache.memory_cache import SimpleCache, CachedGoogleSearcher, CachedJinaScraper
 from src.llm.openrouter_client import OpenRouterClient
 from src.rag.vector_store import VectorStore
 
 
 class DeepSearchPipeline:
-   
+    """
+    Core deep search pipeline
+    Takes a query, searches Google, scrapes pages, stores in vector DB, and generates answer
+    """
+    
     def __init__(self):
         print("\n🚀 Initializing Deep Search Pipeline...")
         
         config.validate()
         
-        self.cache = MemoryCache(
-            default_ttl_hours=config.CACHE_TTL_HOURS,
-            max_size=config.MAX_CACHE_SIZE
-        )
-        
+        print("📦 Setting up cache...")
+        self.cache = SimpleCache()
+
+        print("🔍 Setting up Google Search...")
         self.google_searcher = CachedGoogleSearcher(
             config.GOOGLE_SEARCH_API_KEY,
             config.GOOGLE_CSE_ID,
             self.cache
         )
         
+        print("🌐 Setting up web scraper...")
         self.web_scraper = CachedJinaScraper(self.cache)
-        
+
+        print("🤖 Setting up LLM...")
         self.llm_client = OpenRouterClient(
             config.OPENROUTER_API_KEY,
             model_name=config.OPENROUTER_MODEL
         )
         
+        print("💾 Setting up vector store...")
         self.vector_store = VectorStore()
         
         print("✅ Deep Search Pipeline ready!\n")
@@ -58,7 +69,9 @@ class DeepSearchPipeline:
         max_results: int = 7,
         websocket: Optional[WebSocket] = None
     ) -> Dict:
-        """        
+        """
+        Main search function
+        
         Steps:
         1. Generate multiple search queries using AI (based on depth)
         2. Search Google with all those queries in parallel
@@ -83,8 +96,22 @@ class DeepSearchPipeline:
         
         await self._send_update(websocket, "🧠 Generating search queries...", "planning")
         
+        print(f"🧠 Generating {depth + 1} search queries...")
         num_queries = depth + 1
         search_queries = await self.llm_client.generate_search_queries(query, num_queries)
+        
+        if query not in search_queries:
+            search_queries.insert(0, query)
+        
+        unique_queries = []
+        seen = set()
+        for q in search_queries:
+            q_lower = q.lower().strip()
+            if q_lower not in seen:
+                seen.add(q_lower)
+                unique_queries.append(q)
+        
+        search_queries = unique_queries[:num_queries]
         
         print(f"✅ Using {len(search_queries)} queries:")
         for i, q in enumerate(search_queries, 1):
@@ -95,11 +122,16 @@ class DeepSearchPipeline:
             f"🔍 Searching Google with {len(search_queries)} queries...", 
             "searching"
         )
-
-        search_tasks = [self.google_searcher.search(q, num_results=max_results) for q in search_queries]
+        
+        print(f"\n🔍 Searching Google ({len(search_queries)} queries in parallel)...")
+        
+        search_tasks = [
+            self.google_searcher.search(q, num_results=max_results)
+            for q in search_queries
+        ]
         
         all_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        
+
         all_urls = []
         url_to_result = {}
         
@@ -111,12 +143,8 @@ class DeepSearchPipeline:
                         url_to_result[url] = r
                         all_urls.append(url)
         
-        await self._send_update(
-            websocket,
-            f"📄 Found {len(all_urls)} unique URLs...",
-            "found_urls"
-        )
-
+        print(f"✅ Found {len(all_urls)} unique URLs")
+        
         max_to_scrape = min(len(all_urls), max_results * len(search_queries), 25)
         urls_to_scrape = all_urls[:max_to_scrape]
         
@@ -126,16 +154,19 @@ class DeepSearchPipeline:
             "scraping"
         )
         
+        print(f"\n📄 Scraping {len(urls_to_scrape)} pages...")
         scraped_data = await self.web_scraper.scrape_multiple(urls_to_scrape)
-        
+        print(f"✅ Successfully scraped {len(scraped_data)} pages")
+ 
         await self._send_update(
             websocket,
             f"💾 Adding {len(scraped_data)} documents to knowledge base...",
             "indexing"
         )
         
-        documents_added = 0
-        
+        print(f"\n💾 Adding to vector database...")
+
+        documents_to_add = []
         for scraped in scraped_data:
             url = scraped['url']
             content = scraped['content']
@@ -143,32 +174,31 @@ class DeepSearchPipeline:
             result = url_to_result.get(url, {})
             title = result.get('title', 'Untitled')
             
-            await self.vector_store.add_documents_batch([{
+            documents_to_add.append({
                 'url': url,
                 'title': title,
                 'content': content,
                 'query': query
-            }])
-            documents_added += 1
+            })
         
-        print(f"✅ Added {documents_added} documents to vector store")
+        if documents_to_add:
+            await self.vector_store.add_documents_batch(documents_to_add)
+            print(f"✅ Added {len(documents_to_add)} documents to vector store")
+        
         print(f"📚 Total documents in store: {self.vector_store.get_stats()['total_documents']}")
-        
+
         await self._send_update(
             websocket,
             "🧠 Finding most relevant information...",
             "analyzing"
         )
-
+        
+        print(f"\n🧠 Finding most relevant content...")
+        
         num_chunks = min(10 + (depth * 3), 25)
         relevant_chunks = await self.vector_store.search(query, n_results=num_chunks)
-
-        await self._send_update(
-            websocket,
-            f"✅ Found {len(relevant_chunks)} relevant chunks",
-            "found_chunks"
-        )
-
+        
+        print(f"✅ Found {len(relevant_chunks)} relevant chunks")
         if relevant_chunks:
             top_score = relevant_chunks[0]['similarity_score']
             lowest_score = relevant_chunks[-1]['similarity_score']
@@ -180,6 +210,7 @@ class DeepSearchPipeline:
             "generating"
         )
         
+        print(f"\n🤖 Generating answer with LLM...")
         answer = await self.llm_client.generate_response(
             prompt=query,
             search_results=relevant_chunks

@@ -4,19 +4,13 @@ import asyncio
 
 
 class OpenRouterClient:
-    def __init__(self, api_key: str, model_name: str = "meta-llama/llama-4-maverick:free "):
-        """Set up the OpenRouter client with API key and model"""
+
+    def __init__(self, api_key: str, model_name: str = "google/gemini-2.0-flash-exp:free"):
         self.api_key = api_key
         self.model_name = model_name
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        
-        self.fallback_models = [
-            "google/gemini-2.0-flash-exp:free",
-            "meta-llama/llama-3.2-3b-instruct:free",
-            "qwen/qwen-2-7b-instruct:free"
-        ]
-        
         self.conversation_history = []
+        
         print(f"✅ OpenRouter initialized with: {model_name}")
     
     def clear_history(self):
@@ -143,9 +137,6 @@ Now generate queries for: "{user_query}"
         }
         
         current_model = self.model_name
-        if retry_count > 0 and retry_count <= len(self.fallback_models):
-            current_model = self.fallback_models[retry_count - 1]
-            print(f"🔄 Retry {retry_count}: Trying {current_model}")
         
         payload = {
             "model": current_model,
@@ -160,7 +151,7 @@ Now generate queries for: "{user_query}"
                 }
             ],
             "temperature": temperature,
-            "max_tokens": 3000,  # Long responses for deep search
+            "max_tokens": 3000,
             "top_p": 0.9,
             "frequency_penalty": 0.5,
             "presence_penalty": 0.5

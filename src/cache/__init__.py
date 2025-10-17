@@ -1,4 +1,3 @@
-# src/cache/__init__.py
-from .memory_cache import MemoryCache, CachedGoogleSearcher, CachedJinaScraper
+from .memory_cache import SimpleCache, CachedGoogleSearcher, CachedJinaScraper
 
-__all__ = ['MemoryCache', 'CachedGoogleSearcher', 'CachedJinaScraper']
+__all__ = ['SimpleCache', 'CachedGoogleSearcher', 'CachedJinaScraper']
