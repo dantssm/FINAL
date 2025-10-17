@@ -30,9 +30,9 @@ app.add_middleware(
 )
 
 # Serve static files (CSS, JS, images, etc.)
+# The files are directly in src/api/ not in a static subfolder
 BASE_DIR = os.path.dirname(__file__)
-if os.path.exists(os.path.join(BASE_DIR, "static")):
-    app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 # Initialize the search pipeline once when server starts
 print("🚀 Starting Deep Search API...")
@@ -136,9 +136,9 @@ async def websocket_search(websocket: WebSocket):
                         websocket=websocket
                     )
                     
-                    # Send the final result
+                    # Send the final result with type "complete" so frontend recognizes it
                     await websocket.send_json({
-                        "type": "result",
+                        "type": "complete",
                         "data": {
                             "query": result["query"],
                             "answer": result["answer"],

@@ -1,18 +1,15 @@
 import httpx
-import json
-import re
 from typing import List, Dict, Optional
 import asyncio
 
 
 class OpenRouterClient:
-    def __init__(self, api_key: str, model_name: str = "google/gemini-2.0-flash-exp:free"):
+    def __init__(self, api_key: str, model_name: str = "meta-llama/llama-4-maverick:free "):
         """Set up the OpenRouter client with API key and model"""
         self.api_key = api_key
         self.model_name = model_name
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         
-        # Backup models in case the main one fails
         self.fallback_models = [
             "google/gemini-2.0-flash-exp:free",
             "meta-llama/llama-3.2-3b-instruct:free",
@@ -23,15 +20,10 @@ class OpenRouterClient:
         print(f"✅ OpenRouter initialized with: {model_name}")
     
     def clear_history(self):
-        """Wipe the conversation history"""
         self.conversation_history = []
         print("✅ Conversation history cleared")
     
     def _build_prompt(self, user_query: str, search_results: Optional[List[Dict]] = None) -> str:
-        """
-        Build a clear prompt that makes the LLM understand it needs to cite sources
-        The key is being explicit about what we want
-        """
         parts = []
         
         if search_results:
@@ -42,13 +34,11 @@ class OpenRouterClient:
                 url = result.get('url', 'No URL')
                 content = result.get('content', result.get('snippet', ''))
                 
-                # Format each source clearly with URL
                 parts.append(f"\n--- Source {i} ---")
                 parts.append(f"Title: {title}")
                 parts.append(f"URL: {url}")
                 parts.append(f"Content: {content}\n")
         
-        # Now the actual question and instructions
         parts.append(f"\nUser Question: {user_query}\n")
         parts.append("Instructions:")
         parts.append("- Answer the question thoroughly using the sources above")
@@ -116,7 +106,6 @@ Now generate queries for: "{user_query}"
                     data = response.json()
                     result = data['choices'][0]['message']['content'].strip()
                     
-                    # Just split by lines and clean up
                     queries = [line.strip() for line in result.split('\n') if line.strip()]
                     
                     if len(queries) >= num_queries:
@@ -153,7 +142,6 @@ Now generate queries for: "{user_query}"
             "X-Title": "AI Deep Search"
         }
         
-        # Use fallback models if we've retried
         current_model = self.model_name
         if retry_count > 0 and retry_count <= len(self.fallback_models):
             current_model = self.fallback_models[retry_count - 1]
