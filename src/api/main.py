@@ -1,8 +1,3 @@
-"""
-FastAPI server for deep search
-Simplified to match the student version pipeline
-"""
-
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse

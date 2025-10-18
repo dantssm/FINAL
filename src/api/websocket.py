@@ -1,6 +1,5 @@
-from fastapi import WebSocket, WebSocketDisconnect
-import json
-from src.pipeline.deep_search import DeepSearchPipeline
+from fastapi import WebSocket
+from typing import List
 
 class ConnectionManager:
     def __init__(self):

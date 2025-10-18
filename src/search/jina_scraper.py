@@ -15,7 +15,7 @@ class JinaWebScraper:
         Scrapes the content of a single URL using Jina's web scraper.
 
         Args:
-            url (str): The URL to scrape.
+            url: The URL to scrape.
 
         Returns:
             Optional[str]: The scraped content as a string, or None if scraping failed.
@@ -50,12 +50,12 @@ class JinaWebScraper:
         Scrapes multiple URLs concurrently (meaning ).
 
         Args:
-            urls (List[str]): A list of URLs.
-            max_concurrent (int): Maximum number of concurrent requests.
+            urls: A list of URLs.
+            max_concurrent: Maximum number of concurrent requests.
 
         Returns:
-            List[Dict[str, str]]: A list of dictionaries with 'url' and 'content' keys.
-            [{"url": str, "content": str}, ...]
+            List[Dict]: A list of dictionaries with 'url' and 'content' keys of scraped data:
+                [{"url": str, "content": str}, ...]
         """
         semaphore = asyncio.Semaphore(max_concurrent)
         
@@ -66,7 +66,7 @@ class JinaWebScraper:
                     return {"url": url, "content": content}
                 return None
         
-        print(f"🔄 Scraping {len(urls)} URLs (max {max_concurrent} at once)...")
+        print(f"Scraping {len(urls)} URLs (max {max_concurrent} at once)...")
         
         tasks = [scrape_one(url) for url in urls]
         results = await asyncio.gather(*tasks)

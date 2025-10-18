@@ -15,11 +15,11 @@ class GoogleSearcher:
         Performs a Google search for the given query.
 
         Args:
-            query (str): The search query.
-            num_results (int): The number of search results (max = 100, default = 10).
+            query: The search query.
+            num_results: The number of search results (max = 100, default = 10).
 
         Returns:
-            List[Dict]: A list of dictionaries containing search results.
+            List[Dict]: A list of dictionaries containing search results:
                 [result1: {"title": str, "link": str, "snippet": str}, ...]
         """
         async with httpx.AsyncClient() as client:

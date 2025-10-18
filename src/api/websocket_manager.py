@@ -1,7 +1,5 @@
-# src/api/websocket_manager.py
 from fastapi import WebSocket
-from typing import List, Dict
-import json
+from typing import List
 
 class ConnectionManager:
     def __init__(self):
@@ -24,5 +22,4 @@ class ConnectionManager:
             print(f"❌ Failed to send WebSocket message: {e}")
             self.disconnect(websocket)
 
-# Global WebSocket manager instance
 manager = ConnectionManager()

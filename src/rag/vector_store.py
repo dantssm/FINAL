@@ -35,9 +35,10 @@ class VectorStore:
         Get cloud embeddings from Jina AI
 
         Args:
-            texts (List[str]): List of texts to embed
+            texts: List of texts to embed
         Returns:
-            List[List[float]]: List of embeddings
+            List: List of embeddings:
+                [[float, float, ...], ...]
         """
         print(f"Getting embeddings for {len(texts)} chunks from Jina...")
         
@@ -64,7 +65,7 @@ class VectorStore:
         Add a batch of documents to the vector store
 
         Args:
-            documents (List[Dict[str, str]]): List of documents
+            documents: List of documents:
                 [{"url": str, "title": str, "content": str}, ...]
         """
         print(f"\n📚 Adding {len(documents)} documents...")
@@ -113,10 +114,10 @@ class VectorStore:
         [needs fixing the logic in future]
 
         Args:
-            query (str): Search query
-            n_results (int): Number of results to return
+            query: Search query
+            n_results: Number of results to return
         Returns:
-            List[Dict]: List of search results
+            List[Dict]: List of search results:
                 [{"content": str, "url": str, "title": str, "similarity_score": float}, ...]
         """
         print(f"\nSearching for: '{query[:60]}...'")
@@ -167,9 +168,9 @@ class VectorStore:
         [maybe use langchain text splitter in future]
 
         Args:
-            text (str): Text to split into chunks
-            chunk_size (int): Size of the chunk
-            overlap (int): Number of overlapping characters between chunks
+            text: Text to split into chunks
+            chunk_size: Size of the chunk
+            overlap: Number of overlapping characters between chunks
         Returns:
             List[str]: List of chunks
         """
