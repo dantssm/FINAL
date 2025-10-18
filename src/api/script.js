@@ -1,4 +1,4 @@
-// src/api/script.js - FIXED VERSION
+// src/api/script.js - UPDATED VERSION with citation formatting
 let searchWebSocket = null;
 let currentSearchId = null;
 
@@ -137,7 +137,7 @@ async function fallbackRestSearch(query, depth, maxResults, searchBtn) {
   updateStatus('Using standard search...', 'status');
   
   try {
-    const response = await fetch('/search', {
+    const response = await fetch('/api/search', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ 
@@ -151,7 +151,15 @@ async function fallbackRestSearch(query, depth, maxResults, searchBtn) {
     const data = await response.json();
     
     console.log("✅ REST search completed");
-    displaySearchResults(data);
+    // Format the REST response to match WebSocket format
+    displaySearchResults({
+      query: data.query,
+      answer: data.answer,
+      sources: data.sources,
+      total_sources: data.total_sources,
+      chunks_analyzed: data.chunks_analyzed,
+      time_seconds: data.time_seconds
+    });
     
   } catch (err) {
     console.error("❌ REST search failed:", err);
@@ -187,15 +195,19 @@ function displaySearchResults(data) {
   console.log("📄 Displaying search results");
   console.log("Answer type:", typeof data.answer);
   console.log("Answer length:", data.answer?.length);
-  console.log("First 200 chars:", data.answer?.substring(0, 200));
 
-  // CRITICAL FIX: The answer comes as HTML string, use it directly with innerHTML
-  if (data.answer && data.answer.length > 0) {
-    // The answer is already HTML formatted from the backend
-    // Just set it directly - innerHTML will render the HTML
-    console.log("✅ Setting HTML answer directly with innerHTML");
+  // Check if answer is already HTML formatted (from WebSocket)
+  if (data.answer && data.answer.includes('<div class="search-results">')) {
+    console.log("✅ Setting pre-formatted HTML answer");
     resultsDiv.innerHTML = data.answer;
-  } else {
+  } 
+  // Format plain text answer (from REST API fallback)
+  else if (data.answer && typeof data.answer === 'string') {
+    console.log("🔄 Formatting plain text answer");
+    const formattedAnswer = formatPlainTextAnswer(data);
+    resultsDiv.innerHTML = formattedAnswer;
+  } 
+  else {
     resultsDiv.innerHTML = '<div class="result-card"><div class="answer"><p>No answer returned.</p></div></div>';
   }
 
@@ -209,22 +221,32 @@ function displaySearchResults(data) {
   }
 }
 
-function buildSourcesHTML(sources, totalCount) {
-  let html = '<div class="sources">';
-  html += '<div style="font-weight:700;margin-bottom:8px">📚 Sources (' + (totalCount || sources.length) + '):</div>';
-  
-  sources.forEach(source => {
-    html += '<div class="source">';
-    html += '<div class="source-title">' + escapeHtml(source.title || 'No title') + '</div>';
-    html += '<a href="' + escapeAttr(source.url || '#') + '" target="_blank" rel="noreferrer" class="source-url">' + escapeHtml(source.url || '') + '</a>';
-    if (source.snippet) {
-      html += '<div class="source-snippet">' + escapeHtml(source.snippet) + '</div>';
-    }
-    html += '</div>';
-  });
-  
-  html += '</div>';
-  return html;
+function formatPlainTextAnswer(data) {
+  // Simple formatting for plain text answers from REST API
+  const formattedAnswer = data.answer
+    .split('. ')
+    .map(sentence => `<p class="answer-paragraph">${sentence}.</p>`)
+    .join('');
+
+  return `
+    <div class="search-results">
+      <div class="results-header">
+        <h2>🔍 ${escapeHtml(data.query)}</h2>
+        <div class="results-meta">
+          <span>⏱️ ${data.time_seconds?.toFixed(1) || '0.0'}s</span>
+          <span>📊 ${data.chunks_analyzed || 0} chunks analyzed</span>
+          <span>📚 ${data.total_sources || 0} sources</span>
+        </div>
+      </div>
+      
+      <div class="answer-section">
+        <h3>💡 Answer</h3>
+        <div class="answer-content">
+          ${formattedAnswer}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function showError(message) {

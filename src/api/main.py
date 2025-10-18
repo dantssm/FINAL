@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import List, Dict
 from datetime import datetime
 import os
+import re
 
 from src.pipeline.deep_search import DeepSearchPipeline
 
@@ -54,6 +55,123 @@ class SearchResponse(BaseModel):
     chunks_analyzed: int
     time_seconds: float
     timestamp: str
+
+
+def format_answer_with_paragraphs_and_sources(answer_text: str, sources: List[Dict]) -> str:
+    """
+    Format the answer with proper paragraphs and sources at the bottom
+    """
+    if not answer_text:
+        return "<p>No answer available.</p>"
+    
+    # Remove any existing HTML tags from the answer to start clean
+    clean_text = re.sub(r'<[^>]+>', '', answer_text)
+    
+    # Extract source references and create mapping
+    source_mapping = {}
+    source_counter = 1
+    
+    # Find all source references in the text
+    source_pattern = r'Source\s+(\d+)\s*\(\s*(https?://[^)]+)\s*\)'
+    
+    def replace_source_with_number(match):
+        nonlocal source_counter
+        source_num = match.group(1)
+        url = match.group(2)
+        
+        if url not in source_mapping:
+            source_mapping[url] = source_counter
+            current_num = source_counter
+            source_counter += 1
+        else:
+            current_num = source_mapping[url]
+            
+        return f'Source {current_num}'
+    
+    # Replace source references with simple numbers
+    formatted_text = re.sub(source_pattern, replace_source_with_number, clean_text)
+    
+    # Split into paragraphs while preserving the original structure
+    paragraphs = []
+    current_paragraph = []
+    
+    # Split by sentences but preserve the original flow
+    sentences = re.split(r'(?<=[.!?])\s+', formatted_text)
+    
+    for sentence in sentences:
+        current_paragraph.append(sentence)
+        
+        # Start new paragraph after 2-3 sentences
+        if (len(current_paragraph) >= 3 or 
+            len(' '.join(current_paragraph)) > 300):
+            
+            paragraph_text = ' '.join(current_paragraph)
+            paragraphs.append(f'<p class="answer-paragraph">{paragraph_text}</p>')
+            current_paragraph = []
+    
+    # Add any remaining sentences
+    if current_paragraph:
+        paragraph_text = ' '.join(current_paragraph)
+        paragraphs.append(f'<p class="answer-paragraph">{paragraph_text}</p>')
+    
+    # Create sources section at the bottom
+    if source_mapping:
+        sources_html = ['<div class="sources-section">']
+        sources_html.append('<h4 class="sources-title">References</h4>')
+        sources_html.append('<ol class="sources-list">')
+        
+        # Create reverse mapping from number to URL
+        number_to_url = {v: k for k, v in source_mapping.items()}
+        
+        # Add sources in numerical order
+        for num in sorted(number_to_url.keys()):
+            url = number_to_url[num]
+            # Find the source info for this URL
+            source_info = next((s for s in sources if s.get('url') == url), {})
+            title = source_info.get('title', 'No title available')
+            
+            sources_html.append(
+                f'<li class="source-item">'
+                f'<a href="{url}" class="source-link" target="_blank" rel="noopener noreferrer">'
+                f'[{num}] {title}'
+                f'</a>'
+                f'</li>'
+            )
+        
+        sources_html.append('</ol></div>')
+        paragraphs.append(''.join(sources_html))
+    
+    return ''.join(paragraphs)
+
+
+def create_full_html_response(answer: str, sources: List[Dict], query: str, 
+                            total_sources: int, chunks_analyzed: int, time_seconds: float) -> str:
+    """
+    Create complete HTML response with formatted answer and sources
+    """
+    formatted_answer = format_answer_with_paragraphs_and_sources(answer, sources)
+    
+    html_response = f'''
+    <div class="search-results">
+        <div class="results-header">
+            <h2>🔍 {query}</h2>
+            <div class="results-meta">
+                <span>⏱️ {time_seconds:.1f}s</span>
+                <span>📊 {chunks_analyzed} chunks analyzed</span>
+                <span>📚 {total_sources} sources</span>
+            </div>
+        </div>
+        
+        <div class="answer-section">
+            <h3>💡 Answer</h3>
+            <div class="answer-content">
+                {formatted_answer if formatted_answer else '<p class="no-answer">No answer generated.</p>'}
+            </div>
+        </div>
+    </div>
+    '''
+    
+    return html_response
 
 
 # Serve the main HTML page
@@ -136,12 +254,22 @@ async def websocket_search(websocket: WebSocket):
                         websocket=websocket
                     )
                     
-                    # Send the final result with type "complete" so frontend recognizes it
+                    # Format the answer with HTML
+                    html_answer = create_full_html_response(
+                        answer=result["answer"],
+                        sources=result["sources"],
+                        query=result["query"],
+                        total_sources=result["total_sources"],
+                        chunks_analyzed=result["chunks_analyzed"],
+                        time_seconds=result["time_seconds"]
+                    )
+                    
+                    # Send the final result with formatted HTML
                     await websocket.send_json({
                         "type": "complete",
                         "data": {
                             "query": result["query"],
-                            "answer": result["answer"],
+                            "answer": html_answer,  # Now contains formatted HTML
                             "sources": result["sources"],
                             "total_sources": result["total_sources"],
                             "chunks_analyzed": result["chunks_analyzed"],
@@ -192,7 +320,7 @@ async def search_api(request: SearchRequest):
         
         return SearchResponse(
             query=result['query'],
-            answer=result['answer'],
+            answer=result['answer'],  # Keep original for API
             sources=result['sources'],
             total_sources=result['total_sources'],
             chunks_analyzed=result['chunks_analyzed'],
