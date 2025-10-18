@@ -103,7 +103,7 @@ Now generate queries for: "{user_query}"
             
             async with httpx.AsyncClient(timeout = 15.0) as client:
 
-                response = await client.post(self.base_url, headers = headers, json = payload)
+                response = await client.post(self.BASE_URL, headers = headers, json = payload)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -161,7 +161,7 @@ Now generate queries for: "{user_query}"
         try:
             async with httpx.AsyncClient(timeout = 30.0) as client:
 
-                response = await client.post(self.base_url, headers=headers, json=payload)
+                response = await client.post(self.BASE_URL, headers=headers, json=payload)
                 response.raise_for_status()
                 
                 data = response.json()
