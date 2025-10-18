@@ -20,9 +20,8 @@ class GoogleSearcher:
 
         Returns:
             List[Dict]: A list of dictionaries containing search results.
-            [result1: {"title": str, "link": str, "snippet": str}, ...]
+                [result1: {"title": str, "link": str, "snippet": str}, ...]
         """
-
         async with httpx.AsyncClient() as client:
 
             results = []
