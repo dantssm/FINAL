@@ -34,15 +34,15 @@ class JinaWebScraper:
                 if len(content) > self.max_content_length:
                     content = content[:self.max_content_length] + "..."
                 
-                print(f"✅ Scraped {len(content)} chars from {url[:50]}...")
+                print(f"Scraped {len(content)} chars from {url[:50]}...")
                 return content
                 
             except httpx.HTTPStatusError as e:
-                print(f"❌ HTTP {e.response.status_code} for {url[:50]}...")
+                print(f"HTTP {e.response.status_code} for {url[:50]}...")
                 return None
             
             except Exception as e:
-                print(f"❌ Failed to scrape {url[:50]}...: {str(e)[:50]}")
+                print(f"Failed to scrape {url[:50]}...: {str(e)[:50]}")
                 return None
     
     async def scrape_multiple(self, urls: List[str], max_concurrent: int = 10) -> List[Dict]:
@@ -73,5 +73,5 @@ class JinaWebScraper:
         
         valid_results = [r for r in results if r is not None]
         
-        print(f"✅ Successfully scraped {len(valid_results)}/{len(urls)} URLs")
+        print(f"Successfully scraped {len(valid_results)}/{len(urls)} URLs")
         return valid_results
