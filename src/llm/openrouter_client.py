@@ -5,57 +5,69 @@ import asyncio
 
 class OpenRouterClient:
 
-    def __init__(self, api_key: str, model_name: str = "google/gemini-2.0-flash-exp:free"):
+    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, api_key: str, model_name: str = "meta-llama/llama-4-maverick:free"):
         self.api_key = api_key
         self.model_name = model_name
-        self.base_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.conversation_history = []
         
-        print(f"✅ OpenRouter initialized with: {model_name}")
+        print(f"OpenRouter initialized with: {model_name}")
     
-    def clear_history(self):
-        self.conversation_history = []
-        print("✅ Conversation history cleared")
-    
-    def _build_prompt(self, user_query: str, search_results: Optional[List[Dict]] = None) -> str:
-        parts = []
+    def _build_source_context(self, search_results: List[Dict]) -> str:
+        """
+        Format search results into a readable context for the LLM.
         
-        if search_results:
-            parts.append("You are answering a question using web search results. Here are the sources:\n")
+        Args:
+            search_results: List of result dicts with title, url, content
+        Returns:
+            Formatted string with all sources numbered and organized
+        """
+        parts = ["You are answering a question using web search results. Here are the sources:\n"]
+        
+        for i, result in enumerate(search_results, 1):
+            title = result.get('title', 'Untitled')
+            url = result.get('url', 'No URL')
+            content = result.get('content', result.get('snippet', ''))
             
-            for i, result in enumerate(search_results, 1):
-                title = result.get('title', 'Untitled')
-                url = result.get('url', 'No URL')
-                content = result.get('content', result.get('snippet', ''))
-                
-                parts.append(f"\n--- Source {i} ---")
-                parts.append(f"Title: {title}")
-                parts.append(f"URL: {url}")
-                parts.append(f"Content: {content}\n")
-        
-        parts.append(f"\nUser Question: {user_query}\n")
-        parts.append("Instructions:")
-        parts.append("- Answer the question thoroughly using the sources above")
-        parts.append("- When you use information from a source, write it like: 'According to Source 1 (url), ...'")
-        parts.append("- Include the URL when citing so users can verify")
-        parts.append("- Provide a detailed, comprehensive answer since this is deep search")
-        parts.append("- Don't just copy text, explain and synthesize the information")
+            parts.append(f"\n--- Source {i} ---")
+            parts.append(f"Title: {title}")
+            parts.append(f"URL: {url}")
+            parts.append(f"Content: {content}\n")
         
         return "\n".join(parts)
+    
+    def _build_answer_instructions(self, user_query: str) -> str:
+        """
+        Create the instructions that tell the AI how to generate the answer.
+        
+        Args:
+            user_query: The user's question
+        Returns:
+            Formatted instructions for the AI
+        """
+        return f"""
+User Question: {user_query}
+
+Instructions:
+- Answer the question thoroughly using the sources above
+- When you use information from a source, cite it like: 'According to Source 1 (url), ...'
+- Include the URL when citing so users can verify the information
+- Provide a detailed, comprehensive answer since this is a deep search engine
+- Don't just copy text - explain, synthesize, and connect ideas from multiple sources
+- If sources conflict, mention both perspectives
+- Structure your answer with clear paragraphs for readability
+"""
     
     async def generate_search_queries(self, user_query: str, num_queries: int = 3) -> List[str]:
         """
         Generate smart Google search queries that approach the question from different angles
-        
-        The idea: one question can be answered better with multiple searches
-        For example, "how does photosynthesis work?" could benefit from:
-        - "photosynthesis process steps" (the how)
-        - "chloroplast function photosynthesis" (the mechanism)
-        - "photosynthesis light dark reaction" (the details)
-        
-        This gives us broader coverage than just searching the question as-is
+        Args:
+            user_query: User question
+            num_queries: Number of search queries to generate
+        Returns:
+            List[str]: A list of search query strings
         """
-        print(f"\n🧠 Creating {num_queries} search queries for: '{user_query}'")
+        print(f"\nCreating {num_queries} search queries for: '{user_query}'")
         
         prompt = f"""You are a search query expert. Generate {num_queries} different Google search queries that will help answer this question comprehensively: "{user_query}"
 
@@ -81,20 +93,17 @@ Now generate queries for: "{user_query}"
 """
 
         try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {self.api_key}", 
+                       "Content-Type": "application/json"}
             
-            payload = {
-                "model": self.model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,  # Higher temp for more creative queries
-                "max_tokens": 200
-            }
+            payload = {"model": self.model_name,
+                       "messages": [{"role": "user", "content": prompt}],
+                       "temperature": 0.7,
+                       "max_tokens": 200}
             
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(self.base_url, headers=headers, json=payload)
+            async with httpx.AsyncClient(timeout = 15.0) as client:
+
+                response = await client.post(self.base_url, headers = headers, json = payload)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -103,53 +112,45 @@ Now generate queries for: "{user_query}"
                     queries = [line.strip() for line in result.split('\n') if line.strip()]
                     
                     if len(queries) >= num_queries:
-                        print(f"✅ AI generated {len(queries)} search queries:")
+
+                        print(f"AI generated {len(queries)} search queries:")
                         for i, q in enumerate(queries[:num_queries], 1):
-                            print(f"   {i}. {q}")
+                            print(f"{i}. {q}")
+
                         return queries[:num_queries]
+                    
                     else:
-                        print(f"⚠️ AI only generated {len(queries)} queries, falling back to original")
+                        print(f"AI only generated {len(queries)} queries, falling back to original")
                         return [user_query]
         
         except Exception as e:
-            print(f"⚠️ AI query generation failed: {str(e)[:150]}")
+            print(f"AI query generation failed: {str(e)[:150]}")
             return [user_query]
     
-    async def generate_response(
-        self,
-        prompt: str,
-        context: Optional[str] = None,
-        search_results: Optional[List[Dict]] = None,
-        temperature: float = 0.1,
-        retry_count: int = 0
-    ) -> str:
-        """
-        Generate a response from the AI
-        Tries different models if one fails
-        """
-        full_prompt = self._build_prompt(prompt, search_results)
+    async def generate_response(self, 
+                                prompt: str, 
+                                context: Optional[str] = None, 
+                                search_results: Optional[List[Dict]] = None, 
+                                temperature: float = 0.1
+                                ) -> str:
+        """Generate a response from the AI"""
+        source_context = self._build_source_context(search_results) if search_results else ""
+        answer_instructions = self._build_answer_instructions(prompt)
+        full_prompt = source_context + answer_instructions
         
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:8000",
-            "X-Title": "AI Deep Search"
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}",
+                   "Content-Type": "application/json",
+                   "HTTP-Referer": "http://localhost:8000",
+                   "X-Title": "AI Deep Search"}
         
         current_model = self.model_name
         
         payload = {
             "model": current_model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a research assistant. Answer questions using the provided sources. Always cite your sources with URLs."
-                },
-                {
-                    "role": "user",
-                    "content": full_prompt
-                }
-            ],
+            "messages": [{"role": "system",
+                          "content": "You are a research assistant. Answer questions using the provided sources. Always cite your sources with URLs."},
+                          {"role": "user",
+                           "content": full_prompt}],
             "temperature": temperature,
             "max_tokens": 3000,
             "top_p": 0.9,
@@ -158,53 +159,34 @@ Now generate queries for: "{user_query}"
         }
         
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout = 30.0) as client:
+
                 response = await client.post(self.base_url, headers=headers, json=payload)
                 response.raise_for_status()
                 
                 data = response.json()
                 result = data['choices'][0]['message']['content'].strip()
                 
-                # Basic sanity check
                 if len(result) < 50:
-                    print(f"⚠️ Response too short from {current_model}")
-                    if retry_count < len(self.fallback_models):
-                        return await self.generate_response(
-                            prompt, context, search_results,
-                            temperature=0.1, retry_count=retry_count + 1
-                        )
-                    else:
-                        return "I couldn't generate a good answer. The AI models might be having issues. Try again?"
+                    print(f"Response too short from {current_model}")
+                    return "I couldn't generate a comprehensive answer. The AI response was too short. Please try again."
                 
-                print(f"✅ Got response from {current_model} ({len(result)} chars)")
-                
-                # Save to history
-                self.conversation_history.append({
-                    "user": prompt,
-                    "assistant": result
-                })
+                print(f"Got response from {current_model} ({len(result)} chars)")
                 
                 return result
                 
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP Error {e.response.status_code} with {current_model}")
+            error_msg = f"OpenRouter API error: {e.response.status_code}"
+            print(f"{error_msg}")
             
-            if retry_count < len(self.fallback_models):
-                return await self.generate_response(
-                    prompt, context, search_results,
-                    temperature=0.1, retry_count=retry_count + 1
-                )
+            try:
+                error_detail = e.response.json()
+                print(f"Details: {error_detail}")
+            except:
+                pass
             
-            return f"All AI models failed. Error: {e.response.status_code}"
+            return f"Failed to generate answer. API returned error {e.response.status_code}. Please try again."
             
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
-            
-            if retry_count < len(self.fallback_models):
-                await asyncio.sleep(1)
-                return await self.generate_response(
-                    prompt, context, search_results,
-                    temperature=0.1, retry_count=retry_count + 1
-                )
-            
-            return f"Something went wrong: {str(e)}"
+            print(f"Unexpected error: {str(e)}")
+            return f"An unexpected error occurred: {str(e)}"
