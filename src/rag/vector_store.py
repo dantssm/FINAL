@@ -71,6 +71,7 @@ class VectorStore:
         
         all_chunks = []
         all_metadatas = []
+        all_ids = []
         
         for doc in documents:
 
@@ -86,6 +87,8 @@ class VectorStore:
                                       "chunk_index": i,
                                       "total_chunks": len(chunks)})
             
+                chunk_id = hashlib.md5(f"{doc['url']}_{i}".encode()).hexdigest()
+                all_ids.append(chunk_id)
 
             print(f"Prepared: {doc['title'][:60]}... ({len(chunks)} chunks)")
         
@@ -97,7 +100,8 @@ class VectorStore:
         embeddings = await self.get_embeddings(all_chunks)
         
         print(f"Storing in database...")
-        self.collection.add(embeddings = embeddings,
+        self.collection.add(ids = all_ids,
+                            embeddings = embeddings,
                             documents = all_chunks,
                             metadatas = all_metadatas)
         
