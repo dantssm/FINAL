@@ -110,61 +110,82 @@ class DeepSearchPipeline:
         """Format AI answer text into HTML with clickable source links"""
         url_map = {}
         source_titles = {}
+        used_sources = set()
 
         for i, source in enumerate(sources, 1):
             url_map[i] = source.get('url', '#')
             source_titles[i] = source.get('title', f'Source {i}')
         
-        cited_sources = set()
-        
         text = html.escape(text)
-
-        def replace_citation(match):
-            source_num = int(match.group(1))
-            
-            if source_num not in url_map:
-                return f'Source {source_num}'
-            
-            cited_sources.add(source_num)
-            url = url_map[source_num]
-            
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer" class="source-link">Source {source_num}</a>'
         
-        text = re.sub(r'Source (\d+)(?=[,.\s:]|$)', replace_citation, text)
+        # "Source 1, 2, 3" or "(Source 4, 5)"
+        pattern1 = r'\(?Source\s+(\d+(?:\s*,\s*\d+)*)\)?'
+        matches = re.finditer(pattern1, text, re.IGNORECASE)
+        
+        for match in reversed(list(matches)):
+            full_text = match.group(0)
+            numbers_part = match.group(1)
+            
+            nums = [int(n) for n in re.findall(r'\d+', numbers_part)]
+            
+            links = []
+            for num in nums:
+
+                if num in url_map:
+                    used_sources.add(num)
+                    links.append(f'<a href="{url_map[num]}" target="_blank" class="source-link">Source {num}</a>')
+                else:
+                    links.append(f'Source {num}')
+            
+            if full_text.startswith('('):
+                replacement = f'({", ".join(links)})'
+            else:
+                replacement = ', '.join(links)
+            
+            start, end = match.span()
+            text = text[:start] + replacement + text[end:]
+        
+        # "Source N"
+        pattern2 = r'Source\s+(\d+)'
+        
+        def make_link(match):
+            num = int(match.group(1))
+
+            if num in url_map:
+                used_sources.add(num)
+                return f'<a href="{url_map[num]}" target="_blank" class="source-link">Source {num}</a>'
+            
+            return match.group(0)
+        
+        text = re.sub(pattern2, make_link, text, flags=re.IGNORECASE)
+        
+        result_html = '<div class="chat-block">'
         
         paragraphs = text.split('\n\n')
-        html_parts = ['<div class="chat-block">']
-        
+
         for para in paragraphs:
             if para.strip():
-                formatted = para.replace('\n', '<br>')
-                html_parts.append(f'<p>{formatted}</p>')
+                para = para.replace('\n', '<br>')
+                result_html += f'<p>{para}</p>'
 
-        if cited_sources:
-            html_parts.append('<div class="sources-section">')
-            html_parts.append('<div class="sources-header">Sources:</div>')
+        if used_sources:
+            result_html += '<div class="sources-section">'
+            result_html += '<div class="sources-header">Sources:</div>'
             
-            sorted_citations = sorted(cited_sources)
-            
-            for source_num in sorted_citations:
-                url = url_map[source_num]
-                title = source_titles[source_num]
+            for num in sorted(used_sources):
+                title = source_titles[num]
+                if len(title) > 80:
+                    title = title[:80] + '...'
                 
-                display_title = title[:80] + '...' if len(title) > 80 else title
-                
-                html_parts.append(
-                    f'<div class="source-item">'
-                    f'<span class="source-number">[{source_num}]</span> '
-                    f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer" class="source-link">'
-                    f'{html.escape(display_title)}</a>'
-                    f'</div>'
-                )
+                result_html += f'<div class="source-item">'
+                result_html += f'<span class="source-number">[{num}]</span> '
+                result_html += f'<a href="{html.escape(url_map[num])}" target="_blank" class="source-link">{html.escape(title)}</a>'
+                result_html += '</div>'
             
-            html_parts.append('</div>')
+            result_html += '</div>'
         
-        html_parts.append('</div>')
-        
-        return ''.join(html_parts)
+        result_html += '</div>'
+        return result_html
     
     async def search(self, 
                      query: str, 
