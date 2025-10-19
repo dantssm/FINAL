@@ -50,8 +50,12 @@ User Question: {user_query}
 
 Instructions:
 - Answer the question thoroughly using the sources above
-- When you use information from a source, cite it like: 'According to Source 1 (url), ...'
-- Include the URL when citing so users can verify the information
+- IMPORTANT: When citing, use EXACTLY this format: "Source N" where N is the source number
+Example: "According to Source 1, quantum computing uses qubits..."
+Example: "This was confirmed by Source 3."
+- Do NOT include URLs in your citations - just write "Source N"
+- The system will automatically convert these to clickable links
+- Cite sources frequently to support your claims
 - Provide a detailed, comprehensive answer since this is a deep search engine
 - Don't just copy text - explain, synthesize, and connect ideas from multiple sources
 - If sources conflict, mention both perspectives
