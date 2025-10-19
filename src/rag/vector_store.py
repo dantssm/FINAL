@@ -111,7 +111,7 @@ class VectorStore:
     async def search(self, query: str, n_results: int = 5) -> List[Dict]:
         """
         Search relevant documents in the vector store [needs fixing the logic in future]
-        [needs fixing the logic in future]
+        [definetely needs fixing the logic in future alongside better chunking methods]
 
         Args:
             query: Search query
@@ -165,7 +165,7 @@ class VectorStore:
     def chunk_text(self, text: str, chunk_size: int = 800, overlap: int = 50) -> List[str]:
         """
         Split text into smaller pieces
-        [maybe use langchain text splitter in future]
+        [maybe use langchain text splitter in future, and better chunking thechniques]
 
         Args:
             text: Text to split into chunks
