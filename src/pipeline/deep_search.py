@@ -2,6 +2,8 @@ import asyncio
 from typing import List, Dict, Optional
 from datetime import datetime
 from fastapi import WebSocket
+import html
+import re
 
 from src.config import config
 from src.cache.memory_cache import SimpleCache, CachedGoogleSearcher, CachedJinaScraper
@@ -103,6 +105,76 @@ class DeepSearchPipeline:
                               'query': metadata.get('query', '')})
         
         return documents
+
+    def _format_answer_html(self, text: str, sources: List[Dict]) -> str:
+        """Format AI answer text into HTML with clickable source links"""
+        
+        url_map = {}
+        source_titles = {}
+        for i, source in enumerate(sources[:20], 1):
+            url_map[f'Source {i}'] = source.get('url', '#')
+            source_titles[f'Source {i}'] = source.get('title', f'Source {i}')
+        
+        cited_sources = set()
+        
+        text = html.escape(text)
+        
+        def replace_citation(match):
+            source_num = match.group(1)
+            url = match.group(2)
+            source_key = f'Source {source_num}'
+            cited_sources.add(source_num)
+            
+            actual_url = url_map.get(source_key, url)
+            
+            return f'<a href="{actual_url}" target="_blank" rel="noopener noreferrer" class="source-link">Source {source_num}</a>'
+        
+        text = re.sub(r'Source (\d+) \(([^)]+)\)', replace_citation, text)
+        
+        def replace_standalone_citation(match):
+            source_num = match.group(1)
+            source_key = f'Source {source_num}'
+            cited_sources.add(source_num)
+            url = url_map.get(source_key, '#')
+            
+            return f'<a href="{url}" target="_blank" rel="noopener noreferrer" class="source-link">Source {source_num}</a>'
+        
+        text = re.sub(r'(?<!">)Source (\d+)(?=[,.\s])', replace_standalone_citation, text)
+        
+        paragraphs = text.split('\n\n')
+        html_parts = ['<div class="chat-block">']
+        
+        for para in paragraphs:
+            if para.strip():
+                formatted = para.replace('\n', '<br>')
+                html_parts.append(f'<p>{formatted}</p>')
+        
+        if cited_sources:
+            html_parts.append('<div class="sources-section">')
+            html_parts.append('<div class="sources-header">Sources:</div>')
+            
+            sorted_citations = sorted(cited_sources, key=lambda x: int(x))
+            
+            for source_num in sorted_citations:
+                source_key = f'Source {source_num}'
+                url = url_map.get(source_key, '#')
+                title = source_titles.get(source_key, f'Source {source_num}')
+                
+                display_title = title[:80] + '...' if len(title) > 80 else title
+                
+                html_parts.append(
+                    f'<div class="source-item">'
+                    f'<span class="source-number">[{source_num}]</span> '
+                    f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer" class="source-link">'
+                    f'{html.escape(display_title)}</a>'
+                    f'</div>'
+                )
+            
+            html_parts.append('</div>')
+        
+        html_parts.append('</div>')
+        
+        return ''.join(html_parts)
     
     async def search(self, 
                      query: str, 
@@ -130,7 +202,7 @@ class DeepSearchPipeline:
             print(f"{i}. {q}")
         
         await self._send_update(websocket, 
-                                f"🔍 Searching Google with {len(search_queries)} queries...", 
+                                f"Searching Google with {len(search_queries)} queries...", 
                                 "searching")
         
         print(f"\nSearching Google ({len(search_queries)} queries)...")
@@ -195,11 +267,13 @@ class DeepSearchPipeline:
                                                          search_results = relevant_chunks)
         
         print(f"Generated answer ({len(answer)} chars)")
+
+        formatted_answer = self._format_answer_html(answer, relevant_chunks)
         
         elapsed = (datetime.now() - start_time).total_seconds()
         
         result = {"query": query,
-                  "answer": answer,
+                  "answer": formatted_answer,
                   "total_sources": len(scraped_data),
                   "chunks_analyzed": len(relevant_chunks),
                   "time_seconds": elapsed,

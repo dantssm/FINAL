@@ -70,84 +70,44 @@ h1 {
   padding-left: 16px;
 }
 
-.src-btn, .src-btn-inline {
-  display: inline-block;
-  background: var(--accent-1);
-  color: #fff !important;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 0.85em;
-  font-weight: 600;
+.source-link {
+  color: #8b5cf6;
   text-decoration: none;
-  transition: 0.2s;
-}
-.src-btn:hover, .src-btn-inline:hover {
-  background: #5b21b6;
+  font-weight: 600;
+  border-bottom: 1px solid #8b5cf6;
+  transition: all 0.2s ease;
 }
 
-.status-message {
-  margin-bottom: 6px;
-  padding: 6px 10px;
-  border-left: 4px solid var(--accent-2);
-  background: #ecfeff;
-  font-family: monospace;
+.source-link:hover {
+  color: #7c3aed;
+  border-bottom-color: #7c3aed;
+}
+
+.sources-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.sources-header {
+  font-weight: 700;
   font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.error {
-  background: #ffe4e6;
-  border: 1px solid #fecdd3;
-  padding: 12px;
-  border-radius: 8px;
-}
-
-.chat-block {
-  background: #fff;
-  border-radius: 14px;
-  padding: 20px;
-  margin-bottom: 18px;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.05);
-  border-left: 4px solid #8b5cf6;
-}
-
-.chat-block p {
-  margin: 0 0 12px;
-  font-size: 16px;
+.source-item {
+  margin-bottom: 8px;
+  font-size: 14px;
   line-height: 1.6;
-  color: #1f1f1f;
 }
 
-.chat-sources {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0;
-}
-
-.chat-source-btn {
-  display: inline-block;
-  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
-  color: #fff !important;
-  border: none;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 13px;
+.source-number {
+  color: #6b7280;
   font-weight: 600;
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-}
-
-.chat-source-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-  opacity: 0.92;
-}
-
-.chat-source-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  margin-right: 4px;
 }
 
 .options {
@@ -187,4 +147,19 @@ h1 {
   border-radius: 8px;
   font-family: monospace;
   font-size: 13px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    margin: 20px;
+    padding: 20px;
+  }
+  
+  .chat-block {
+    padding: 16px;
+  }
+  
+  .chat-sources {
+    gap: 8px;
+  }
 }
